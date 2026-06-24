@@ -157,3 +157,27 @@ set_parent :: proc(ctx: ^Context, handle: Handle, parent: Handle) {
 		p.last_child = handle
 	}
 }
+
+// Raises a node to the top of its sibling order (drawn last / hit-tested
+// first) by re-appending it to its current parent. Used for popups/windows.
+bring_to_front :: proc(ctx: ^Context, handle: Handle) {
+	if !is_valid(ctx, handle) {
+		return
+	}
+	parent := get_component(ctx, handle).parent
+	if !handle_is_null(parent) {
+		set_parent(ctx, handle, parent) // unlink + re-append as last child
+	}
+}
+
+// Reports whether `ancestor` is `node` itself or one of its ancestors.
+is_descendant :: proc(ctx: ^Context, node, ancestor: Handle) -> bool {
+	cur := node
+	for !handle_is_null(cur) {
+		if cur == ancestor {
+			return true
+		}
+		cur = get_component(ctx, cur).parent
+	}
+	return false
+}

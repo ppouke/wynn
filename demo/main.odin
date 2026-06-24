@@ -4,9 +4,12 @@ import "core:fmt"
 import gl "vendor:OpenGL"
 import sdl "vendor:sdl3"
 import wynn ".."
+import cl "../components_library"
 
 // Handles the demo needs to reference each frame.
 UI :: struct {
+	menus:        [3]cl.Menu,
+	action_label: wynn.Handle,
 	btn_inc:      wynn.Handle,
 	btn_dec:      wynn.Handle,
 	count_label:  wynn.Handle,
@@ -24,12 +27,20 @@ gl_set_proc :: proc(p: rawptr, name: cstring) {
 build_ui :: proc(ctx: ^wynn.Context) -> UI {
 	ui: UI
 
-	// A panel laid out as a vertical column.
+	// A toolbar with three hover-to-open dropdown menus.
+	tb := cl.toolbar(ctx, ctx.screen)
+	ui.menus[0] = cl.menu(ctx, tb, "File", {"New", "Open", "Save", "Quit"})
+	ui.menus[1] = cl.menu(ctx, tb, "Edit", {"Undo", "Redo", "Cut", "Copy", "Paste"})
+	ui.menus[2] = cl.menu(ctx, tb, "View", {"Zoom In", "Zoom Out", "Reset"})
+
+	// A panel laid out as a vertical column, below the toolbar.
 	panel := wynn.column(ctx, ctx.screen, gap = 12, padding = {16, 16, 16, 16})
 	pc := wynn.get_component(ctx, panel)
-	pc.rect.pos = {40, 40}
-	pc.constraints.pref_size = {320, 390}
+	pc.rect.pos = {40, 46}
+	pc.constraints.pref_size = {320, 420}
 	pc.color = {0.15, 0.16, 0.20, 1}
+
+	ui.action_label = wynn.label(ctx, panel, "Ready", text_size = 16, size = {288, 22})
 
 	wynn.label(ctx, panel, "wynn demo", text_size = 28, size = {288, 36})
 
@@ -144,8 +155,10 @@ main :: proc() {
 
 	ctx := wynn.initialize(context.allocator, {900, 640})
 	ui := build_ui(ctx)
+	wynn.process_ui(ctx) // initial layout so menus can position against resolved rects
 
 	count := 0
+	open_menu := -1
 	running := true
 	for running {
 		ev: sdl.Event
@@ -171,8 +184,12 @@ main :: proc() {
 		wynn.update_screen_size(ctx, {f32(w), f32(h)})
 
 		wynn.process_input(ctx)
-		wynn.process_ui(ctx)
 
+		// Host reactions that mutate the tree run between input and layout, so
+		// menu open/close positions land in this frame's solve.
+		if it := cl.menu_bar_update(ctx, ui.menus[:], &open_menu); !wynn.handle_is_null(it) {
+			wynn.get_component(ctx, ui.action_label).text = wynn.get_component(ctx, it).text
+		}
 		if wynn.was_clicked(ctx, ui.btn_inc) {
 			count += 1
 		}
@@ -189,6 +206,8 @@ main :: proc() {
 		sbuf: [32]u8
 		sval := int(wynn.get_component(ctx, ui.slider).value * 100 + 0.5)
 		wynn.get_component(ctx, ui.slider_label).text = fmt.bprintf(sbuf[:], "%d", sval)
+
+		wynn.process_ui(ctx)
 
 		data := wynn.render(ctx, context.allocator)
 		build_vertices(&r, data)

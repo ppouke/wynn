@@ -79,10 +79,11 @@ directly in `Component`.
 Children form a doubly-linked list; **sibling order is the logical/draw order**
 (first child drawn first / underneath, hit-testing walks children in reverse).
 
-- Implemented: `set_parent` appends as last child + full `unlink`.
-- **Planned ops:** `insert_before`, `insert_after`, `move_to_front`,
-  `move_to_back` — UI needs explicit reordering for z-order and dynamic
-  insertion. Build when the first caller needs them.
+- Implemented: `set_parent` appends as last child + full `unlink`;
+  `bring_to_front` (re-append to current parent → drawn/hit-tested on top, used
+  by popups/menus); `is_descendant` (ancestor walk).
+- **Planned ops:** `insert_before`, `insert_after`, `move_to_back` — build when
+  the first caller needs them.
 - **Rationale:** Doubly-linked gives O(1) insert/remove/reorder anywhere, which
   retained UIs need constantly.
 
@@ -198,10 +199,15 @@ immediate-mode.)
 
 ## 12. Widget layer — **Decided: thin constructors over the core API**
 
-- `core.odin` provides convenience constructors that wrap
-  `add_component`+`set_parent`+field setup and return the new `Handle`:
-  `label`, `button`, `checkbox`, `toggle_switch`, `slider`, `row`, `column`,
-  `grid` (plus `new_child`). (`toggle_switch`, not `switch` — Odin keyword.)
+- **Two tiers, two packages:**
+  - `core.odin` (`package wynn`) — base widgets that wrap
+    `add_component`+`set_parent`+field setup and return the new `Handle`:
+    `label`, `button`, `checkbox`, `toggle_switch`, `slider`, `row`, `column`,
+    `grid` (plus `new_child`). (`toggle_switch`, not `switch` — Odin keyword.)
+  - `components_library/` (`package components_library`, imports `wynn`) —
+    larger composite widgets, one file each: `toolbar.odin`, `menu.odin`. Lives
+    in its own package because Odin makes every directory a package; it's a
+    layer built on the engine, so callers use `cl.menu(...)` + `wynn.button(...)`.
 - **Stateful widgets** store a normalized `value: f32` (0..1) on `Component`
   (also emitted in `Render_Data`): `checkbox`/`toggle_switch` use the `Toggle`
   trait (value 0/1); `slider` uses `Slide`. Behavior is resolved generically in
@@ -216,7 +222,20 @@ immediate-mode.)
   `Render_Data` by `render`. (The host still owns font metrics/measurement and
   the actual glyph drawing; wynn only stores and forwards the string + size.)
 - Config uses default + named args (e.g. `label(ctx, p, "Hi", text_size = 18)`).
-- Covered by `test/widgets_test.odin`.
+- **Toolbar + dropdown menus** (`components_library`): the toolbar is a
+  full-width top-pinned `Row`; each `menu` adds a title button and builds a
+  hidden dropdown `column` **parented to the screen** (so it floats, unclipped).
+  This is the first widget needing the **popup/overlay pattern**: parent-to-
+  screen + `bring_to_front`, rather than a clipped child.
+- **Mechanism vs policy split** for menus:
+  - *mechanism* (always available): `menu_show` (position under title + raise),
+    `menu_hide`, `menu_is_open`, `menu_hovered`, `menu_items`.
+  - *policy* (opt-in): `menu_bar_update(ctx, menus, ^open) -> Handle` implements
+    the default hover-to-open behavior (open/switch/close, returns the clicked
+    item). The "which menu is open" state is **caller-owned** (an `int`), not in
+    `Context` — widget state stays out of the engine core. Custom behavior?
+    Ignore the driver and call the ops directly.
+- Covered by `test/widgets_test.odin`, `test/menu_test.odin`.
 
 ## 13. Demo / host integration — **`demo/` (SDL3 + OpenGL)**
 
@@ -250,7 +269,8 @@ exe). The library proper has no SDL/GL dependency.
 1. **Resize trait** (§11): edge/corner grab detection + drag-to-resize.
 2. **Z-order raise on press** (§5, §11): bring `active` to front (`move_to_back`
    of sibling list) on press, for window-style focus.
-3. **Sibling reorder ops** (§5): `insert_before/after`, `move_to_front/back`.
+3. **Sibling reorder ops** (§5): `insert_before/after`, `move_to_back`
+   (`bring_to_front` done).
 4. **Content-driven sizing** (§6, §8): let containers size to their children
    (extension point already in `measure`).
 5. **Iterative traversal** (§6) for layout/render/hit-test/remove if depth grows.

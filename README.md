@@ -24,8 +24,8 @@ reference host.
 - **Interaction** — hover, mouse capture, focus, click; framework-driven
   `Move` (drag), `Slide` (slider), and `Toggle` (checkbox/switch) behaviors.
 - **Widgets** — `label`, `button`, `checkbox`, `toggle_switch`, `slider`,
-  `row`, `column`, `grid` — all thin sugar over the core (no special-casing in
-  the solver/renderer/input passes).
+  `row`, `column`, `grid`, and a `toolbar` + dropdown `menu` — all thin sugar
+  over the core (no special-casing in the solver/renderer/input passes).
 
 ## Quick start
 
@@ -106,7 +106,8 @@ slider with a readout, a checkbox, a switch, and a grid of colour swatches.
 | `layout.odin` | measure/arrange solver, flow containers, `rect_contains` |
 | `input.odin` | input feed, `process_input`, hit-testing, interaction queries |
 | `render.odin` | `render` — emits `[]Render_Data` in painter's order |
-| `core.odin` | widget constructors |
+| `core.odin` | base widget constructors (label/button/checkbox/slider/row/column/grid) |
+| `components_library/` | composite widgets (separate package): `toolbar.odin`, `menu.odin` |
 | `test/` | unit tests (separate package) |
 | `demo/` | SDL3 + OpenGL reference host (separate package) |
 

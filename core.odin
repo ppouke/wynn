@@ -1,18 +1,23 @@
 package wynn
 
 // ----------------------------------------------------------------------------
-// Default widgets
+// Base widgets
 //
 // Thin convenience constructors over the low-level API (add_component +
 // set_parent + Component fields). Each returns the new component's Handle, so
 // callers keep the handle to query interaction (e.g. was_clicked) or to tweak
 // fields afterwards via get_component.
+//
+// Larger composite widgets (toolbar, menus, ...) live in the separate
+// `components_library` package, which is built on top of these.
 // ----------------------------------------------------------------------------
 
 DEFAULT_TEXT_SIZE :: f32(14)
 
 WHITE :: vec4{1, 1, 1, 1}
 BUTTON_COLOR :: vec4{0.20, 0.20, 0.22, 1}
+CHECK_COLOR :: vec4{0.35, 0.35, 0.40, 1}
+SLIDER_COLOR :: vec4{0.30, 0.30, 0.35, 1}
 
 // Creates a component parented under `parent` and returns its handle.
 new_child :: proc(ctx: ^Context, parent: Handle) -> Handle {
@@ -59,9 +64,6 @@ button :: proc(
 	return h
 }
 
-CHECK_COLOR :: vec4{0.35, 0.35, 0.40, 1}
-SLIDER_COLOR :: vec4{0.30, 0.30, 0.35, 1}
-
 // A boolean checkbox. Toggles `value` (0/1) on click; read it back via
 // get_component(ctx, h).value (>= 0.5 means checked).
 checkbox :: proc(
@@ -98,8 +100,8 @@ toggle_switch :: proc(
 	return h
 }
 
-// A horizontal slider. Dragging sets `value` in [0,1]; `value` starts at
-// `value` (clamped). Read it back via get_component(ctx, h).value.
+// A horizontal slider. Dragging sets `value` in [0,1]; starts at `value`
+// (clamped). Read it back via get_component(ctx, h).value.
 slider :: proc(
 	ctx: ^Context,
 	parent: Handle,
