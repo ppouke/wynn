@@ -155,7 +155,6 @@ main :: proc() {
 
 	ctx := wynn.initialize(context.allocator, {900, 640})
 	ui := build_ui(ctx)
-	wynn.process_ui(ctx) // initial layout so menus can position against resolved rects
 
 	count := 0
 	open_menu := -1
