@@ -17,6 +17,8 @@ UI :: struct {
 	slider_label: wynn.Handle,
 	check:        wynn.Handle,
 	sw:           wynn.Handle,
+	window:       wynn.Handle,
+	win_btn:      wynn.Handle,
 }
 
 // OpenGL proc loader, fed to gl.load_up_to via SDL's GL_GetProcAddress.
@@ -81,6 +83,22 @@ build_ui :: proc(ctx: ^wynn.Context) -> UI {
 		s.constraints.pref_size = {64, 28}
 		s.color = col
 	}
+
+	// A floating window. Static by default; the host (below) opts it into
+	// dragging (Move trait) and raise-on-press. Overlaps the panel to show it
+	// floats above other content.
+	ui.window = cl.floating(ctx, {300, 300}, {280, 170})
+	wynn.get_component(ctx, ui.window).traits += {.Move} // drag by the body
+
+	title := wynn.label(ctx, ui.window, "Floating window", text_size = 18, size = {236, 24})
+	tc := &wynn.get_component(ctx, title).constraints
+	tc.anchors = {.Left, .Top}
+	tc.margins = {left = 12, top = 12}
+
+	ui.win_btn = wynn.button(ctx, ui.window, "OK", size = {80, 28})
+	bc := &wynn.get_component(ctx, ui.win_btn).constraints
+	bc.anchors = {.Right, .Bottom}
+	bc.margins = {right = 12, bottom = 12}
 
 	return ui
 }
@@ -189,6 +207,15 @@ main :: proc() {
 		if it := cl.menu_bar_update(ctx, ui.menus[:], &open_menu); !wynn.handle_is_null(it) {
 			wynn.get_component(ctx, ui.action_label).text = wynn.get_component(ctx, it).text
 		}
+
+		// Raise the floating window when it (or any of its children) is pressed.
+		if wynn.is_descendant(ctx, ctx.active, ui.window) {
+			wynn.bring_to_front(ctx, ui.window)
+		}
+		if wynn.was_clicked(ctx, ui.win_btn) {
+			wynn.get_component(ctx, ui.action_label).text = "Window: OK"
+		}
+
 		if wynn.was_clicked(ctx, ui.btn_inc) {
 			count += 1
 		}

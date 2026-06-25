@@ -191,6 +191,17 @@ immediate-mode.)
 - **App-intent traits stay with the host:** `Close`/`Hide`/`Press` semantics are
   *not* hard-coded. The host polls `is_hovered` / `is_active` / `is_focused` /
   `was_clicked` and acts on the component's traits as it sees fit.
+  `mouse_over_ui` reports whether the cursor is over any visible component
+  (anything but the screen background) — e.g. to decide whether the UI should
+  consume the mouse vs. pass it to the world behind it.
+- **Visibility propagates down:** render and hit-testing return at a hidden node
+  before recursing, so `visible = false` on a parent hides its whole subtree
+  (drawing *and* input). A child keeps its own `visible` flag (no cascade
+  writes), so re-showing the parent restores per-child state.
+- **Built-in press feedback:** `render` emits a `Press` component's color
+  slightly darkened (`PRESS_DARKEN`) while it is the held/active component, so
+  every renderer shows press feedback for free. This is *visual only* — the
+  click *action* is still host-driven via `was_clicked`.
 - **Frame order:** feed events → `process_input` → `process_ui` (layout) →
   `render`. Hover uses the previous frame's resolved rects (standard 1-frame
   latency); drags applied in `process_input` land in the same frame's layout.
@@ -208,6 +219,7 @@ immediate-mode.)
     larger composite widgets, one file each: `toolbar.odin`, `menu.odin`. Lives
     in its own package because Odin makes every directory a package; it's a
     layer built on the engine, so callers use `cl.menu(...)` + `wynn.button(...)`.
+    Composite widgets so far: `toolbar`/`menu` and `floating`.
 - **Stateful widgets** store a normalized `value: f32` (0..1) on `Component`
   (also emitted in `Render_Data`): `checkbox`/`toggle_switch` use the `Toggle`
   trait (value 0/1); `slider` uses `Slide`. Behavior is resolved generically in
@@ -235,6 +247,11 @@ immediate-mode.)
     item). The "which menu is open" state is **caller-owned** (an `int`), not in
     `Context` — widget state stays out of the engine core. Custom behavior?
     Ignore the driver and call the ops directly.
+- **Floating window** (`components_library/floating.odin`): a container parented
+  to the screen at an absolute `pos`/`size`, floating above other UI (overlay
+  pattern, unclipped). **Static by design** — no built-in drag/raise; the host
+  opts in by adding the `Move` trait (drag) and calling `bring_to_front` on
+  press (the demo does both). Reuses existing primitives; no new engine code.
 - Covered by `test/widgets_test.odin`, `test/menu_test.odin`.
 
 ## 13. Demo / host integration — **`demo/` (SDL3 + OpenGL)**

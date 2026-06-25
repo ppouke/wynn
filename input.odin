@@ -163,6 +163,16 @@ was_clicked :: proc(ctx: ^Context, h: Handle) -> bool {
 	return !handle_is_null(h) && ctx.clicked == h
 }
 
+// Reports whether the mouse is currently over a visible UI component, i.e. any
+// hovered component other than the screen background (empty space resolves to
+// the screen root). Uses the hover resolved by the last process_input; hit-
+// testing already skips hidden subtrees, so a component hidden via itself or an
+// ancestor does not count. Handy for deciding whether the UI should consume the
+// mouse this frame rather than passing it to the world behind it.
+mouse_over_ui :: proc(ctx: ^Context) -> bool {
+	return !handle_is_null(ctx.hovered) && ctx.hovered != ctx.screen
+}
+
 // Returns the top-most visible component containing `point`, or NULL_HANDLE if
 // none (not even the screen) contains it. Children are tested in reverse draw
 // order so the front-most node wins, and the deepest hit is returned.

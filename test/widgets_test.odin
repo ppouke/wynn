@@ -69,6 +69,42 @@ test_button_click :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_button_darkens_while_pressed :: proc(t: ^testing.T) {
+	ctx := wynn.initialize(context.allocator, {800, 600})
+	defer free(ctx)
+
+	btn := wynn.button(ctx, ctx.screen, "OK", size = {100, 30}, color = {0.5, 0.5, 0.5, 1})
+	wynn.process_ui(ctx)
+
+	// not pressed -> base colour
+	d0 := wynn.render(ctx, context.allocator)
+	base := d0[0].color
+	delete(d0, context.allocator)
+	testing.expect_value(t, base, wynn.vec4{0.5, 0.5, 0.5, 1})
+
+	// press and hold over the button -> it becomes the active component
+	wynn.input_mouse_move(ctx, {20, 15})
+	wynn.input_mouse_button_down(ctx, .Left)
+	wynn.process_input(ctx)
+
+	d1 := wynn.render(ctx, context.allocator)
+	pressed := d1[0].color
+	delete(d1, context.allocator)
+	testing.expect(t, pressed.r < base.r) // darker rgb
+	testing.expect(t, pressed.g < base.g)
+	testing.expect(t, pressed.b < base.b)
+	testing.expect_value(t, pressed.a, base.a) // alpha unchanged
+
+	// release -> back to base colour
+	wynn.input_mouse_button_up(ctx, .Left)
+	wynn.process_input(ctx)
+	d2 := wynn.render(ctx, context.allocator)
+	released := d2[0].color
+	delete(d2, context.allocator)
+	testing.expect_value(t, released, base)
+}
+
+@(test)
 test_container_helpers :: proc(t: ^testing.T) {
 	ctx := wynn.initialize(context.allocator, {800, 600})
 	defer free(ctx)

@@ -102,6 +102,26 @@ test_menu_item_click_and_hover :: proc(t: ^testing.T) {
 	testing.expect(t, wynn.was_clicked(ctx, items[1]))
 }
 
+@(test)
+test_floating_window :: proc(t: ^testing.T) {
+	ctx := wynn.initialize(context.allocator, {800, 600})
+	defer free(ctx)
+
+	win := cl.floating(ctx, {120, 80}, {260, 180})
+	wc := wynn.get_component(ctx, win)
+	testing.expect_value(t, wc.parent, ctx.screen) // parented to the screen
+	testing.expect_value(t, wc.rect.pos, wynn.vec2{120, 80})
+	testing.expect_value(t, wc.constraints.pref_size, wynn.vec2{260, 180})
+
+	// content is positioned relative to the window's absolute origin
+	child := wynn.label(ctx, win, "hi", size = {50, 20})
+	wynn.get_component(ctx, child).rect.pos = {10, 10}
+	wynn.process_ui(ctx)
+
+	testing.expect_value(t, wynn.get_component(ctx, win).global_rect.pos, wynn.vec2{120, 80})
+	testing.expect_value(t, wynn.get_component(ctx, child).global_rect.pos, wynn.vec2{130, 90})
+}
+
 // Drives the hover-to-open policy: open, switch, close, and select.
 @(test)
 test_menu_bar_update :: proc(t: ^testing.T) {

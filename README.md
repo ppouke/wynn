@@ -107,7 +107,7 @@ slider with a readout, a checkbox, a switch, and a grid of colour swatches.
 | `input.odin` | input feed, `process_input`, hit-testing, interaction queries |
 | `render.odin` | `render` — emits `[]Render_Data` in painter's order |
 | `core.odin` | base widget constructors (label/button/checkbox/slider/row/column/grid) |
-| `components_library/` | composite widgets (separate package): `toolbar.odin`, `menu.odin` |
+| `components_library/` | composite widgets (separate package): `toolbar.odin`, `menu.odin`, `floating.odin` |
 | `test/` | unit tests (separate package) |
 | `demo/` | SDL3 + OpenGL reference host (separate package) |
 
