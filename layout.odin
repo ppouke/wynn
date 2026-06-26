@@ -1,81 +1,96 @@
 package wynn
 
 // ----------------------------------------------------------------------------
-// Layout solver
+// Layout solver (operates on the current frame's node arena)
 //
-// Two passes over the tree:
-//   1. measure (bottom-up): each node resolves its intrinsic size from its own
-//      constraints (pref clamped to min/max) and stores it in `rect.size`.
-//      Children are measured first so content-driven sizing can be added here
-//      later without changing the arrange pass.
-//   2. arrange (top-down): each node resolves its absolute `global_rect` from
-//      its anchors/margins against the parent's already-resolved global rect.
-//
-// The screen root keeps the rect set by initialize/update_screen_size and is
-// never resized by constraints; its children are arranged within it.
+// Two passes: measure (bottom-up intrinsic size) then arrange (top-down,
+// resolving anchors/flow into global_rect). Node 0 is the screen root and keeps
+// its frame size. The math is identical to the retained version; it just walks
+// node indices instead of handles. No nodes are appended during the solve, so
+// holding node pointers within a pass is safe.
 // ----------------------------------------------------------------------------
 
-// Recomputes geometry for the entire tree. Call once per frame.
 solve_layout :: proc(ctx: ^Context) {
-	root := get_component(ctx, ctx.screen)
-	root.global_rect = root.rect // root fills the screen
-
-	child := root.first_child
-	for !handle_is_null(child) {
-		measure(ctx, child)
-		child = get_component(ctx, child).next_sibling
+	if len(ctx.nodes) == 0 {
+		return
 	}
+	ctx.nodes[0].global_rect = ctx.nodes[0].rect // root fills the screen
 
-	arrange_children(ctx, ctx.screen)
+	child := ctx.nodes[0].first_child
+	for child != NO_NODE {
+		measure(ctx, child)
+		child = ctx.nodes[child].next_sibling
+	}
+	arrange_children(ctx, 0)
 }
 
-// Bottom-up pass: resolve intrinsic size for `handle` and its subtree.
-measure :: proc(ctx: ^Context, handle: Handle) {
-	c := get_component(ctx, handle)
-
-	child := c.first_child
-	for !handle_is_null(child) {
+// Bottom-up: resolve intrinsic size for `idx` and its subtree.
+measure :: proc(ctx: ^Context, idx: int) {
+	child := ctx.nodes[idx].first_child
+	for child != NO_NODE {
 		measure(ctx, child)
-		child = get_component(ctx, child).next_sibling
+		child = ctx.nodes[child].next_sibling
 	}
-
-	c.rect.size = clamp_size(c.constraints)
+	ctx.nodes[idx].rect.size = clamp_size(ctx.nodes[idx].constraints)
 }
 
-// Top-down pass: position `parent`'s direct children, then recurse into each
-// child's subtree. A container with a layout kind flows its children and
-// ignores their anchors; otherwise children resolve by their own anchors.
-arrange_children :: proc(ctx: ^Context, parent: Handle) {
-	p := get_component(ctx, parent)
-	parent_rect := p.global_rect
+// Top-down: position `parent`'s direct children, then recurse. A container with
+// a layout kind flows its children and ignores their anchors.
+arrange_children :: proc(ctx: ^Context, parent: int) {
+	parent_rect := ctx.nodes[parent].global_rect
 
-	if p.layout.kind == .None {
-		child := p.first_child
-		for !handle_is_null(child) {
-			cc := get_component(ctx, child)
-			arrange_one(cc, parent_rect)
-			child = cc.next_sibling
+	if ctx.nodes[parent].layout.kind == .None {
+		child := ctx.nodes[parent].first_child
+		for child != NO_NODE {
+			arrange_one(ctx, child, parent_rect)
+			child = ctx.nodes[child].next_sibling
 		}
 	} else {
-		arrange_flow(ctx, p, parent_rect)
+		arrange_flow(ctx, parent, parent_rect)
 	}
 
-	// Recurse into each child's own subtree.
-	child := p.first_child
-	for !handle_is_null(child) {
+	child := ctx.nodes[parent].first_child
+	for child != NO_NODE {
 		arrange_children(ctx, child)
-		child = get_component(ctx, child).next_sibling
+		child = ctx.nodes[child].next_sibling
 	}
 }
 
-// Positions all children of a container node by its layout kind. Each child
-// keeps its measured size (`rect.size`); positions are laid out within the
-// parent's content rect (parent rect inset by `padding`).
-@(private = "file")
-arrange_flow :: proc(ctx: ^Context, p: ^Component, prect: Rect) {
-	lay := p.layout
+// Resolves one node's absolute rect from its constraints and the parent's rect.
+arrange_one :: proc(ctx: ^Context, idx: int, parent: Rect) {
+	cons := ctx.nodes[idx].constraints
 
-	// Content origin/extent after padding.
+	x, w := resolve_axis(
+		.Left in cons.anchors,
+		.Right in cons.anchors,
+		cons.margins.left,
+		cons.margins.right,
+		parent.pos.x,
+		parent.size.x,
+		ctx.nodes[idx].rect.pos.x,
+		ctx.nodes[idx].rect.size.x,
+	)
+	y, h := resolve_axis(
+		.Top in cons.anchors,
+		.Bottom in cons.anchors,
+		cons.margins.top,
+		cons.margins.bottom,
+		parent.pos.y,
+		parent.size.y,
+		ctx.nodes[idx].rect.pos.y,
+		ctx.nodes[idx].rect.size.y,
+	)
+
+	ctx.nodes[idx].global_rect = Rect{pos = {x, y}, size = {w, h}}
+}
+
+// Positions all children of a container by its layout kind. Each child keeps
+// its measured size; positions are within the parent's content rect (parent
+// rect inset by padding).
+@(private = "file")
+arrange_flow :: proc(ctx: ^Context, parent: int, prect: Rect) {
+	lay := ctx.nodes[parent].layout
+
 	cx := prect.pos.x + lay.padding.left
 	cy := prect.pos.y + lay.padding.top
 	cw := prect.size.x - lay.padding.left - lay.padding.right
@@ -85,24 +100,24 @@ arrange_flow :: proc(ctx: ^Context, p: ^Component, prect: Rect) {
 
 	switch lay.kind {
 	case .None:
-	// handled by caller; nothing to do here
+	// handled by caller
 	case .Row:
 		x := cx
-		child := p.first_child
-		for !handle_is_null(child) {
-			cc := get_component(ctx, child)
-			cc.global_rect = Rect{pos = {x, cy}, size = cc.rect.size}
-			x += cc.rect.size.x + lay.gap.x
-			child = cc.next_sibling
+		child := ctx.nodes[parent].first_child
+		for child != NO_NODE {
+			sz := ctx.nodes[child].rect.size
+			ctx.nodes[child].global_rect = Rect{pos = {x, cy}, size = sz}
+			x += sz.x + lay.gap.x
+			child = ctx.nodes[child].next_sibling
 		}
 	case .Column:
 		y := cy
-		child := p.first_child
-		for !handle_is_null(child) {
-			cc := get_component(ctx, child)
-			cc.global_rect = Rect{pos = {cx, y}, size = cc.rect.size}
-			y += cc.rect.size.y + lay.gap.y
-			child = cc.next_sibling
+		child := ctx.nodes[parent].first_child
+		for child != NO_NODE {
+			sz := ctx.nodes[child].rect.size
+			ctx.nodes[child].global_rect = Rect{pos = {cx, y}, size = sz}
+			y += sz.y + lay.gap.y
+			child = ctx.nodes[child].next_sibling
 		}
 	case .Grid:
 		cols := lay.columns
@@ -113,63 +128,29 @@ arrange_flow :: proc(ctx: ^Context, p: ^Component, prect: Rect) {
 		if col_w < 0 {
 			col_w = 0
 		}
-
 		i: i32 = 0
 		row_y := cy
-		row_h: f32 = 0 // tallest item in the current row
-		child := p.first_child
-		for !handle_is_null(child) {
-			cc := get_component(ctx, child)
+		row_h: f32 = 0
+		child := ctx.nodes[parent].first_child
+		for child != NO_NODE {
+			sz := ctx.nodes[child].rect.size
 			col := i % cols
 			cell_x := cx + f32(col) * (col_w + lay.gap.x)
-			cc.global_rect = Rect{pos = {cell_x, row_y}, size = cc.rect.size}
-			if cc.rect.size.y > row_h {
-				row_h = cc.rect.size.y
+			ctx.nodes[child].global_rect = Rect{pos = {cell_x, row_y}, size = sz}
+			if sz.y > row_h {
+				row_h = sz.y
 			}
-			if col == cols - 1 { 	// last column: advance to next row
+			if col == cols - 1 {
 				row_y += row_h + lay.gap.y
 				row_h = 0
 			}
 			i += 1
-			child = cc.next_sibling
+			child = ctx.nodes[child].next_sibling
 		}
 	}
 }
 
-// Resolves one component's absolute rect from its constraints and the parent's
-// resolved rect.
-arrange_one :: proc(c: ^Component, parent: Rect) {
-	cons := c.constraints
-
-	x, w := resolve_axis(
-		.Left in cons.anchors,
-		.Right in cons.anchors,
-		cons.margins.left,
-		cons.margins.right,
-		parent.pos.x,
-		parent.size.x,
-		c.rect.pos.x,
-		c.rect.size.x,
-	)
-	y, h := resolve_axis(
-		.Top in cons.anchors,
-		.Bottom in cons.anchors,
-		cons.margins.top,
-		cons.margins.bottom,
-		parent.pos.y,
-		parent.size.y,
-		c.rect.pos.y,
-		c.rect.size.y,
-	)
-
-	c.global_rect = Rect{pos = {x, y}, size = {w, h}}
-}
-
-// Resolves position and size on a single axis.
-//   - both edges anchored: stretch to fill the parent minus margins.
-//   - low edge only:  pin to the low edge + margin, keep measured size.
-//   - high edge only: pin to the high edge - margin, keep measured size.
-//   - neither:        place at parent origin + local offset, keep measured size.
+// Resolves position and size on a single axis (see retained DESIGN §8).
 @(private = "file")
 resolve_axis :: proc(
 	a_lo, a_hi: bool,
@@ -203,20 +184,10 @@ resolve_axis :: proc(
 // Clamps preferred size to [min, max] per axis. A max component of 0 means
 // unbounded on that axis.
 clamp_size :: proc(cons: Constraints) -> vec2 {
-	return vec2{
+	return vec2 {
 		clamp_axis(cons.pref_size.x, cons.min_size.x, cons.max_size.x),
 		clamp_axis(cons.pref_size.y, cons.min_size.y, cons.max_size.y),
 	}
-}
-
-// Reports whether point `p` lies within rect `r` (edges inclusive).
-rect_contains :: proc(r: Rect, p: vec2) -> bool {
-	return(
-		p.x >= r.pos.x &&
-		p.x <= r.pos.x + r.size.x &&
-		p.y >= r.pos.y &&
-		p.y <= r.pos.y + r.size.y \
-	)
 }
 
 @(private = "file")
@@ -229,4 +200,14 @@ clamp_axis :: proc(pref, min, max: f32) -> f32 {
 		v = max
 	}
 	return v
+}
+
+// Reports whether point `p` lies within rect `r` (edges inclusive).
+rect_contains :: proc(r: Rect, p: vec2) -> bool {
+	return(
+		p.x >= r.pos.x &&
+		p.x <= r.pos.x + r.size.x &&
+		p.y >= r.pos.y &&
+		p.y <= r.pos.y + r.size.y \
+	)
 }

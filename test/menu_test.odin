@@ -4,183 +4,103 @@ import "core:testing"
 import wynn ".."
 import cl "../components_library"
 
-@(test)
-test_bring_to_front :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+// The immediate-mode menu: a toolbar title button plus, when open, a floating
+// dropdown. `open` is caller-owned (holds the open menu's id, or 0). `menu`
+// returns the index of the item clicked this frame, or -1.
+//
+// Toolbar geometry: full-width Row, padding {4,4,4,4}. The "File" title is the
+// first item -> {4,4 .. 60,32}, center {32,18}. The dropdown opens just below
+// at {4,32}; column items (padding 2, gap {0,2}, item {150,26}) put item 1
+// ("Open") at {6,62 .. 156,88}, center {81,75}.
 
-	a := wynn.new_child(ctx, ctx.screen)
-	b := wynn.new_child(ctx, ctx.screen)
-	c := wynn.new_child(ctx, ctx.screen)
+Menu_State :: struct {
+	open:   wynn.ID,
+	result: int,
+}
 
-	// initial order a -> b -> c
-	testing.expect_value(t, wynn.get_component(ctx, ctx.screen).first_child, a)
-	testing.expect_value(t, wynn.get_component(ctx, ctx.screen).last_child, c)
-
-	wynn.bring_to_front(ctx, a)
-	// now b -> c -> a
-	testing.expect_value(t, wynn.get_component(ctx, ctx.screen).first_child, b)
-	testing.expect_value(t, wynn.get_component(ctx, ctx.screen).last_child, a)
-	testing.expect_value(t, wynn.get_component(ctx, a).prev_sibling, c)
+build_menu :: proc(ctx: ^wynn.Context, st: ^Menu_State) {
+	cl.begin_toolbar(ctx)
+	st.result = cl.menu(ctx, &st.open, "menu.file", "File", {"New", "Open", "Quit"})
+	cl.end_toolbar(ctx)
 }
 
 @(test)
-test_is_descendant :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+test_menu_closed_emits_only_title :: proc(t: ^testing.T) {
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st: Menu_State
 
-	p := wynn.new_child(ctx, ctx.screen)
-	c := wynn.new_child(ctx, p)
-	g := wynn.new_child(ctx, c)
+	frame(ctx, build_menu, &st)
 
-	testing.expect(t, wynn.is_descendant(ctx, g, p)) // grandchild under p
-	testing.expect(t, wynn.is_descendant(ctx, g, c))
-	testing.expect(t, wynn.is_descendant(ctx, p, p)) // self
-	testing.expect(t, !wynn.is_descendant(ctx, c, g)) // ancestor is not descendant
+	testing.expect_value(t, st.open, wynn.ID(0))
+	testing.expect_value(t, overlay_count(ctx), 0) // no dropdown
 }
 
 @(test)
-test_menu_construction :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+test_menu_opens_on_title_click :: proc(t: ^testing.T) {
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st: Menu_State
 
-	tb := cl.toolbar(ctx, ctx.screen)
-	m := cl.menu(ctx, tb, "File", {"New", "Open", "Quit"})
+	frame(ctx, build_menu, &st)        // geometry
+	click(ctx, {32, 18}, build_menu, &st) // click the title
 
-	testing.expect_value(t, wynn.get_component(ctx, m.title).parent, tb)
-	testing.expect_value(t, wynn.get_component(ctx, m.dropdown).parent, ctx.screen)
-	testing.expect_value(t, m.count, 3)
-	testing.expect(t, !cl.menu_is_open(ctx, &m)) // hidden initially
-
-	for it in cl.menu_items(&m) {
-		testing.expect_value(t, wynn.get_component(ctx, it).parent, m.dropdown)
-	}
+	testing.expect_value(t, st.open, wynn.get_id("menu.file"))
+	testing.expect(t, overlay_count(ctx) > 0) // dropdown now emitted
 }
 
 @(test)
-test_menu_show_positions_and_raises :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+test_menu_item_click_returns_index :: proc(t: ^testing.T) {
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st: Menu_State
 
-	tb := cl.toolbar(ctx, ctx.screen)
-	m := cl.menu(ctx, tb, "File", {"New", "Open"})
-	wynn.process_ui(ctx) // resolve the title's rect
+	frame(ctx, build_menu, &st)            // geometry
+	click(ctx, {32, 18}, build_menu, &st)  // open the menu
+	frame(ctx, build_menu, &st)            // settle: dropdown items enter prev_nodes
+	click(ctx, {81, 75}, build_menu, &st)  // click item 1 ("Open")
 
-	cl.menu_show(ctx, &m)
-	testing.expect(t, cl.menu_is_open(ctx, &m))
-
-	tr := wynn.get_component(ctx, m.title).global_rect
-	dr := wynn.get_component(ctx, m.dropdown).rect.pos
-	testing.expect_value(t, dr, wynn.vec2{tr.pos.x, tr.pos.y + tr.size.y}) // just below title
-	// raised above siblings
-	testing.expect_value(t, wynn.get_component(ctx, ctx.screen).last_child, m.dropdown)
-
-	cl.menu_hide(ctx, &m)
-	testing.expect(t, !cl.menu_is_open(ctx, &m))
+	testing.expect_value(t, st.result, 1)
+	testing.expect_value(t, st.open, wynn.ID(0)) // selection closes the menu
 }
 
 @(test)
-test_menu_item_click_and_hover :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+test_menu_closes_on_outside_press :: proc(t: ^testing.T) {
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st: Menu_State
 
-	tb := cl.toolbar(ctx, ctx.screen)
-	m := cl.menu(ctx, tb, "File", {"New", "Open", "Quit"})
-	wynn.process_ui(ctx)
-	cl.menu_show(ctx, &m)
-	wynn.process_ui(ctx) // arrange the now-visible dropdown items
+	frame(ctx, build_menu, &st)
+	click(ctx, {32, 18}, build_menu, &st) // open
+	testing.expect_value(t, st.open, wynn.get_id("menu.file"))
+	frame(ctx, build_menu, &st) // settle
 
-	items := cl.menu_items(&m)
-	r := wynn.get_component(ctx, items[1]).global_rect
-	center := r.pos + r.size * 0.5
-
-	wynn.input_mouse_move(ctx, center)
-	wynn.process_input(ctx)
-	testing.expect(t, cl.menu_hovered(ctx, &m))
-
-	click_at(ctx, center)
-	testing.expect(t, wynn.was_clicked(ctx, items[1]))
+	// a press anywhere outside the title/items closes the menu
+	press_frame(ctx, {400, 400}, build_menu, &st)
+	testing.expect_value(t, st.open, wynn.ID(0))
 }
 
 @(test)
 test_floating_window :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	pos := wynn.vec2{120, 80}
 
-	win := cl.floating(ctx, {120, 80}, {260, 180})
-	wc := wynn.get_component(ctx, win)
-	testing.expect_value(t, wc.parent, ctx.screen) // parented to the screen
-	testing.expect_value(t, wc.rect.pos, wynn.vec2{120, 80})
-	testing.expect_value(t, wc.constraints.pref_size, wynn.vec2{260, 180})
+	wynn.begin_frame(ctx, SCREEN)
+	winidx := len(ctx.nodes)
+	cl.begin_floating(ctx, "win", &pos, {260, 180}, layout = wynn.Layout{})
+	childidx := len(ctx.nodes)
+	wynn.label(ctx, "hi", size = {50, 20})
+	ctx.nodes[childidx].rect.pos = {10, 10}
+	cl.end_floating(ctx)
+	wynn.end_frame(ctx)
+
+	w := ctx.nodes[winidx]
+	testing.expect_value(t, w.parent, 0) // parented to the screen root
+	testing.expect_value(t, w.rect.pos, wynn.vec2{120, 80})
+	testing.expect_value(t, w.constraints.pref_size, wynn.vec2{260, 180})
+	testing.expect_value(t, w.global_rect.pos, wynn.vec2{120, 80})
 
 	// content is positioned relative to the window's absolute origin
-	child := wynn.label(ctx, win, "hi", size = {50, 20})
-	wynn.get_component(ctx, child).rect.pos = {10, 10}
-	wynn.process_ui(ctx)
-
-	testing.expect_value(t, wynn.get_component(ctx, win).global_rect.pos, wynn.vec2{120, 80})
-	testing.expect_value(t, wynn.get_component(ctx, child).global_rect.pos, wynn.vec2{130, 90})
-}
-
-// Drives the hover-to-open policy: open, switch, close, and select.
-@(test)
-test_menu_bar_update :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
-
-	tb := cl.toolbar(ctx, ctx.screen)
-	menus := [2]cl.Menu {
-		cl.menu(ctx, tb, "File", {"New", "Open"}),
-		cl.menu(ctx, tb, "Edit", {"Undo"}),
-	}
-	open := -1
-	wynn.process_ui(ctx)
-
-	// One frame of the real loop order: process_input -> menu_bar_update ->
-	// process_ui (so a freshly-opened dropdown is positioned for next frame).
-	step :: proc(ctx: ^wynn.Context, menus: []cl.Menu, open: ^int, p: wynn.vec2) -> wynn.Handle {
-		wynn.input_mouse_move(ctx, p)
-		wynn.process_input(ctx)
-		sel := cl.menu_bar_update(ctx, menus, open)
-		wynn.process_ui(ctx)
-		return sel
-	}
-
-	// title rects: File at {4,4,56,28}, Edit at {62,4,56,28}
-	file_c := wynn.vec2{32, 18}
-	edit_c := wynn.vec2{90, 18}
-
-	// hover File -> opens menu 0
-	step(ctx, menus[:], &open, file_c)
-	testing.expect_value(t, open, 0)
-	testing.expect(t, cl.menu_is_open(ctx, &menus[0]))
-
-	// hover Edit -> switches to menu 1
-	step(ctx, menus[:], &open, edit_c)
-	testing.expect_value(t, open, 1)
-	testing.expect(t, !cl.menu_is_open(ctx, &menus[0]))
-	testing.expect(t, cl.menu_is_open(ctx, &menus[1]))
-
-	// hover empty space -> closes
-	step(ctx, menus[:], &open, {400, 300})
-	testing.expect_value(t, open, -1)
-	testing.expect(t, !cl.menu_is_open(ctx, &menus[1]))
-
-	// reopen File (dropdown positioned + items arranged by step's process_ui)
-	step(ctx, menus[:], &open, file_c)
-	item0 := cl.menu_items(&menus[0])[0]
-	ir := wynn.get_component(ctx, item0).global_rect
-	center := ir.pos + ir.size * 0.5
-
-	wynn.input_mouse_move(ctx, center)
-	wynn.input_mouse_button_down(ctx, .Left)
-	wynn.process_input(ctx)
-	cl.menu_bar_update(ctx, menus[:], &open) // press: still open, no click yet
-
-	wynn.input_mouse_button_up(ctx, .Left)
-	wynn.process_input(ctx)
-	sel := cl.menu_bar_update(ctx, menus[:], &open) // release: click registered
-
-	testing.expect_value(t, sel, item0)
-	testing.expect_value(t, open, -1)
+	testing.expect_value(t, ctx.nodes[childidx].global_rect.pos, wynn.vec2{130, 90})
 }

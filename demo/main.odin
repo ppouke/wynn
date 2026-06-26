@@ -6,101 +6,100 @@ import sdl "vendor:sdl3"
 import wynn ".."
 import cl "../components_library"
 
-// Handles the demo needs to reference each frame.
-UI :: struct {
-	menus:        [3]cl.Menu,
-	action_label: wynn.Handle,
-	btn_inc:      wynn.Handle,
-	btn_dec:      wynn.Handle,
-	count_label:  wynn.Handle,
-	slider:       wynn.Handle,
-	slider_label: wynn.Handle,
-	check:        wynn.Handle,
-	sw:           wynn.Handle,
-	window:       wynn.Handle,
-	win_btn:      wynn.Handle,
-}
-
 // OpenGL proc loader, fed to gl.load_up_to via SDL's GL_GetProcAddress.
 gl_set_proc :: proc(p: rawptr, name: cstring) {
 	(^rawptr)(p)^ = rawptr(sdl.GL_GetProcAddress(name))
 }
 
-build_ui :: proc(ctx: ^wynn.Context) -> UI {
-	ui: UI
+// All app state lives here — wynn retains nothing between frames.
+App :: struct {
+	count:     int,
+	volume:    f32,
+	checked:   bool,
+	switched:  bool,
+	open_menu: wynn.ID,
+	win_pos:   wynn.vec2,
+	action:    string,
+}
 
-	// A toolbar with three hover-to-open dropdown menus.
-	tb := cl.toolbar(ctx, ctx.screen)
-	ui.menus[0] = cl.menu(ctx, tb, "File", {"New", "Open", "Save", "Quit"})
-	ui.menus[1] = cl.menu(ctx, tb, "Edit", {"Undo", "Redo", "Cut", "Copy", "Paste"})
-	ui.menus[2] = cl.menu(ctx, tb, "View", {"Zoom In", "Zoom Out", "Reset"})
+FILE_ITEMS :: []string{"New", "Open", "Save", "Quit"}
+EDIT_ITEMS :: []string{"Undo", "Redo", "Cut", "Copy", "Paste"}
+VIEW_ITEMS :: []string{"Zoom In", "Zoom Out", "Reset"}
 
-	// A panel laid out as a vertical column, below the toolbar.
-	panel := wynn.column(ctx, ctx.screen, gap = 12, padding = {16, 16, 16, 16})
-	pc := wynn.get_component(ctx, panel)
-	pc.rect.pos = {40, 46}
-	pc.constraints.pref_size = {320, 420}
-	pc.color = {0.15, 0.16, 0.20, 1}
+SWATCHES :: [4]wynn.vec4 {
+	{0.85, 0.30, 0.30, 1},
+	{0.30, 0.80, 0.45, 1},
+	{0.30, 0.55, 0.90, 1},
+	{0.90, 0.80, 0.30, 1},
+}
 
-	ui.action_label = wynn.label(ctx, panel, "Ready", text_size = 16, size = {288, 22})
-
-	wynn.label(ctx, panel, "wynn demo", text_size = 28, size = {288, 36})
-
-	// A row of two buttons.
-	bar := wynn.row(ctx, panel, gap = 10)
-	wynn.get_component(ctx, bar).constraints.pref_size = {288, 32}
-	ui.btn_inc = wynn.button(ctx, bar, "+1", size = {80, 32})
-	ui.btn_dec = wynn.button(ctx, bar, "-1", size = {80, 32})
-
-	ui.count_label = wynn.label(ctx, panel, "Count: 0", text_size = 20, size = {288, 28})
-
-	// A slider with a live value readout.
-	srow := wynn.row(ctx, panel, gap = 10)
-	wynn.get_component(ctx, srow).constraints.pref_size = {288, 22}
-	ui.slider = wynn.slider(ctx, srow, value = 0.5, size = {200, 20})
-	ui.slider_label = wynn.label(ctx, srow, "50", text_size = 16, size = {70, 20})
-
-	// A checkbox and a switch, each with a label.
-	trow := wynn.row(ctx, panel, gap = 10)
-	wynn.get_component(ctx, trow).constraints.pref_size = {288, 24}
-	ui.check = wynn.checkbox(ctx, trow, checked = true, size = {22, 22})
-	wynn.label(ctx, trow, "Check", text_size = 16, size = {64, 22})
-	ui.sw = wynn.toggle_switch(ctx, trow, on = false, size = {44, 22})
-	wynn.label(ctx, trow, "Switch", text_size = 16, size = {72, 22})
-
-	// A 4-column grid of colour swatches.
-	g := wynn.grid(ctx, panel, columns = 4, gap = {6, 6})
-	wynn.get_component(ctx, g).constraints.pref_size = {288, 60}
-	swatches := [4][4]f32 {
-		{0.85, 0.30, 0.30, 1},
-		{0.30, 0.80, 0.45, 1},
-		{0.30, 0.55, 0.90, 1},
-		{0.90, 0.80, 0.30, 1},
+// Builds the whole UI for one frame from current app state (immediate mode).
+build_ui :: proc(ctx: ^wynn.Context, app: ^App) {
+	// Toolbar with three click-to-open dropdown menus.
+	cl.begin_toolbar(ctx)
+	file, edit, view := FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS
+	if i := cl.menu(ctx, &app.open_menu, "menu.file", "File", file); i >= 0 {
+		app.action = file[i]
 	}
-	for col in swatches {
-		sw := wynn.new_child(ctx, g)
-		s := wynn.get_component(ctx, sw)
-		s.constraints.pref_size = {64, 28}
-		s.color = col
+	if i := cl.menu(ctx, &app.open_menu, "menu.edit", "Edit", edit); i >= 0 {
+		app.action = edit[i]
 	}
+	if i := cl.menu(ctx, &app.open_menu, "menu.view", "View", view); i >= 0 {
+		app.action = view[i]
+	}
+	cl.end_toolbar(ctx)
 
-	// A floating window. Static by default; the host (below) opts it into
-	// dragging (Move trait) and raise-on-press. Overlaps the panel to show it
-	// floats above other content.
-	ui.window = cl.floating(ctx, {300, 300}, {280, 170})
-	wynn.get_component(ctx, ui.window).traits += {.Move} // drag by the body
+	// Main panel, anchored below the toolbar, laid out as a column.
+	wynn.begin_panel(
+		ctx,
+		layout = {kind = .Column, gap = 12, padding = {16, 16, 16, 16}},
+		constraints = {anchors = {.Left, .Top}, margins = {left = 40, top = 46}, pref_size = {320, 420}},
+	)
+	{
+		wynn.label(ctx, app.action, 16, wynn.WHITE, {288, 22})
 
-	title := wynn.label(ctx, ui.window, "Floating window", text_size = 18, size = {236, 24})
-	tc := &wynn.get_component(ctx, title).constraints
-	tc.anchors = {.Left, .Top}
-	tc.margins = {left = 12, top = 12}
+		wynn.begin_row(ctx, gap = 10, constraints = {pref_size = {288, 32}})
+		if wynn.button(ctx, "inc", "+1", {80, 32}) {app.count += 1}
+		if wynn.button(ctx, "dec", "-1", {80, 32}) {app.count -= 1}
+		wynn.end_row(ctx)
 
-	ui.win_btn = wynn.button(ctx, ui.window, "OK", size = {80, 28})
-	bc := &wynn.get_component(ctx, ui.win_btn).constraints
-	bc.anchors = {.Right, .Bottom}
-	bc.margins = {right = 12, bottom = 12}
+		wynn.label(ctx, fmt.tprintf("Count: %d", app.count), 20, wynn.WHITE, {288, 28})
 
-	return ui
+		wynn.begin_row(ctx, gap = 10, constraints = {pref_size = {288, 22}})
+		wynn.slider(ctx, "vol", &app.volume, {200, 20})
+		wynn.label(ctx, fmt.tprintf("%d", int(app.volume * 100 + 0.5)), 16, wynn.WHITE, {70, 20})
+		wynn.end_row(ctx)
+
+		wynn.begin_row(ctx, gap = 10, constraints = {pref_size = {288, 24}})
+		wynn.checkbox(ctx, "chk", &app.checked, {22, 22})
+		wynn.label(ctx, "Check", 16, wynn.WHITE, {64, 22})
+		wynn.toggle_switch(ctx, "sw", &app.switched, {44, 22})
+		wynn.label(ctx, "Switch", 16, wynn.WHITE, {72, 22})
+		wynn.end_row(ctx)
+
+		wynn.begin_grid(ctx, 4, gap = {6, 6}, constraints = {pref_size = {288, 60}})
+		for c in SWATCHES {
+			wynn.begin_panel(ctx, color = c, layout = {}, constraints = {pref_size = {64, 28}})
+			wynn.end_panel(ctx)
+		}
+		wynn.end_grid(ctx)
+	}
+	wynn.end_panel(ctx)
+
+	// Draggable floating window (overlaps the panel to show it floats on top).
+	// None layout so children place themselves by anchors.
+	cl.begin_floating(ctx, "win", &app.win_pos, {280, 170}, layout = wynn.Layout{})
+	{
+		wynn.label(ctx, "Floating window", 18, wynn.WHITE, {236, 24})
+		wynn.anchor(ctx, {.Left, .Top}, {left = 12, top = 12})
+
+		wynn.label(ctx, "drag my body", 14, wynn.WHITE, {236, 20})
+		wynn.anchor(ctx, {.Left, .Top}, {left = 12, top = 40})
+
+		if wynn.button(ctx, "winok", "OK", {80, 28}) {app.action = "Window: OK"}
+		wynn.anchor(ctx, {.Right, .Bottom}, {right = 12, bottom = 12})
+	}
+	cl.end_floating(ctx)
 }
 
 build_vertices :: proc(r: ^Renderer, data: []wynn.Render_Data) {
@@ -172,10 +171,15 @@ main :: proc() {
 	}
 
 	ctx := wynn.initialize(context.allocator, {900, 640})
-	ui := build_ui(ctx)
+	defer wynn.destroy(ctx)
 
-	count := 0
-	open_menu := -1
+	app := App {
+		volume  = 0.5,
+		checked = true,
+		win_pos = {300, 300},
+		action  = "Ready",
+	}
+
 	running := true
 	for running {
 		ev: sdl.Event
@@ -198,48 +202,17 @@ main :: proc() {
 
 		w, h: i32
 		sdl.GetWindowSizeInPixels(window, &w, &h)
-		wynn.update_screen_size(ctx, {f32(w), f32(h)})
 
-		wynn.process_input(ctx)
+		wynn.begin_frame(ctx, {f32(w), f32(h)})
+		build_ui(ctx, &app)
+		wynn.end_frame(ctx)
 
-		// Host reactions that mutate the tree run between input and layout, so
-		// menu open/close positions land in this frame's solve.
-		if it := cl.menu_bar_update(ctx, ui.menus[:], &open_menu); !wynn.handle_is_null(it) {
-			wynn.get_component(ctx, ui.action_label).text = wynn.get_component(ctx, it).text
-		}
-
-		// Raise the floating window when it (or any of its children) is pressed.
-		if wynn.is_descendant(ctx, ctx.active, ui.window) {
-			wynn.bring_to_front(ctx, ui.window)
-		}
-		if wynn.was_clicked(ctx, ui.win_btn) {
-			wynn.get_component(ctx, ui.action_label).text = "Window: OK"
-		}
-
-		if wynn.was_clicked(ctx, ui.btn_inc) {
-			count += 1
-		}
-		if wynn.was_clicked(ctx, ui.btn_dec) {
-			count -= 1
-		}
-
-		// Refresh the count label. The buffer lives for this iteration, which
-		// is all we need: render() copies the string and we draw it below.
-		buf: [64]u8
-		wynn.get_component(ctx, ui.count_label).text = fmt.bprintf(buf[:], "Count: %d", count)
-
-		// Live readout of the slider value (0..100).
-		sbuf: [32]u8
-		sval := int(wynn.get_component(ctx, ui.slider).value * 100 + 0.5)
-		wynn.get_component(ctx, ui.slider_label).text = fmt.bprintf(sbuf[:], "%d", sval)
-
-		wynn.process_ui(ctx)
-
-		data := wynn.render(ctx, context.allocator)
+		data := wynn.render(ctx, context.temp_allocator)
 		build_vertices(&r, data)
-		delete(data)
 
 		renderer_flush(&r, f32(w), f32(h))
 		sdl.GL_SwapWindow(window)
+
+		free_all(context.temp_allocator) // frees this frame's render slice + tprintf strings
 	}
 }

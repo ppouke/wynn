@@ -1,15 +1,12 @@
 package wynn
 
 // ----------------------------------------------------------------------------
-// Base widgets
+// Immediate-mode widgets
 //
-// Thin convenience constructors over the low-level API (add_component +
-// set_parent + Component fields). Each returns the new component's Handle, so
-// callers keep the handle to query interaction (e.g. was_clicked) or to tweak
-// fields afterwards via get_component.
-//
-// Larger composite widgets (toolbar, menus, ...) live in the separate
-// `components_library` package, which is built on top of these.
+// Containers come in begin_*/end_* pairs (children emitted between them).
+// Leaf widgets push one node and resolve interaction against the hot/active
+// state set up in begin_frame. Interactive widgets take an explicit string id;
+// stateful widgets take their value by pointer so the app owns the state.
 // ----------------------------------------------------------------------------
 
 DEFAULT_TEXT_SIZE :: f32(14)
@@ -18,143 +15,191 @@ WHITE :: vec4{1, 1, 1, 1}
 BUTTON_COLOR :: vec4{0.20, 0.20, 0.22, 1}
 CHECK_COLOR :: vec4{0.35, 0.35, 0.40, 1}
 SLIDER_COLOR :: vec4{0.30, 0.30, 0.35, 1}
+PANEL_COLOR :: vec4{0.15, 0.16, 0.20, 1}
 
-// Creates a component parented under `parent` and returns its handle.
-new_child :: proc(ctx: ^Context, parent: Handle) -> Handle {
-	h := add_component(ctx)
-	set_parent(ctx, h, parent)
-	return h
+// ---- Containers -----------------------------------------------------------
+
+// A horizontal flow container (children left to right, `gap` between them).
+begin_row :: proc(ctx: ^Context, gap: f32 = 0, padding := Sides{}, constraints := Constraints{}) {
+	begin_container(ctx, Layout{kind = .Row, gap = {gap, 0}, padding = padding}, {}, constraints)
+}
+end_row :: proc(ctx: ^Context) {pop_container(ctx)}
+
+// A vertical flow container (children top to bottom, `gap` between them).
+begin_column :: proc(ctx: ^Context, gap: f32 = 0, padding := Sides{}, constraints := Constraints{}) {
+	begin_container(ctx, Layout{kind = .Column, gap = {0, gap}, padding = padding}, {}, constraints)
+}
+end_column :: proc(ctx: ^Context) {pop_container(ctx)}
+
+// A grid flow container with a fixed `columns` count; items wrap left to right.
+begin_grid :: proc(
+	ctx: ^Context,
+	columns: i32,
+	gap := vec2{0, 0},
+	padding := Sides{},
+	constraints := Constraints{},
+) {
+	begin_container(ctx, Layout{kind = .Grid, columns = columns, gap = gap, padding = padding}, {}, constraints)
+}
+end_grid :: proc(ctx: ^Context) {pop_container(ctx)}
+
+// A colored panel. `layout` controls how its children are arranged (Column by
+// default); size/position it via `constraints`.
+begin_panel :: proc(
+	ctx: ^Context,
+	color := PANEL_COLOR,
+	layout := Layout{kind = .Column},
+	constraints := Constraints{},
+) {
+	begin_container(ctx, layout, color, constraints)
+}
+end_panel :: proc(ctx: ^Context) {pop_container(ctx)}
+
+// Anchors the most recently emitted widget within its (None-layout) parent,
+// overriding flow placement. Call immediately after the widget. Keeps the
+// widget's size; sets which parent edges it pins to and the margins.
+anchor :: proc(ctx: ^Context, edges: Anchor_Edges, margins := Sides{}) {
+	if len(ctx.nodes) > 0 {
+		ctx.nodes[len(ctx.nodes) - 1].constraints.anchors = edges
+		ctx.nodes[len(ctx.nodes) - 1].constraints.margins = margins
+	}
 }
 
-// A text element. Sized by `size` (pref); the host renders `text` at
-// `text_size` using the Text trait.
+// ---- Leaf widgets ---------------------------------------------------------
+
+// A text element (non-interactive). Sized by `size` (pref).
 label :: proc(
 	ctx: ^Context,
-	parent: Handle,
 	text: string,
 	text_size := DEFAULT_TEXT_SIZE,
 	color := WHITE,
 	size := vec2{0, 0},
-) -> Handle {
-	h := new_child(ctx, parent)
-	c := get_component(ctx, h)
-	c.traits += {.Text}
-	c.text = text
-	c.text_size = text_size
-	c.color = color
-	c.constraints.pref_size = size
-	return h
+) {
+	idx := push_node(ctx)
+	n := &ctx.nodes[idx]
+	n.traits = {.Text}
+	n.text = text
+	n.text_size = text_size
+	n.color = color
+	n.constraints.pref_size = size
 }
 
-// A clickable, labelled box. Poll `was_clicked(ctx, h)` after process_input.
+// A clickable, labelled box. Returns true on the frame it is clicked.
 button :: proc(
 	ctx: ^Context,
-	parent: Handle,
+	id: string,
 	text: string,
 	size := vec2{96, 32},
 	color := BUTTON_COLOR,
-) -> Handle {
-	h := new_child(ctx, parent)
-	c := get_component(ctx, h)
-	c.traits += {.Press, .Text}
-	c.text = text
-	c.text_size = DEFAULT_TEXT_SIZE
-	c.color = color
-	c.constraints.pref_size = size
-	return h
+) -> bool {
+	return button_id(ctx, get_id(id), text, size, color)
 }
 
-// A boolean checkbox. Toggles `value` (0/1) on click; read it back via
-// get_component(ctx, h).value (>= 0.5 means checked).
+// Like `button` but takes a pre-computed ID (for derived/loop ids, e.g. menu
+// items). Returns true on the frame it is clicked.
+button_id :: proc(
+	ctx: ^Context,
+	id: ID,
+	text: string,
+	size := vec2{96, 32},
+	color := BUTTON_COLOR,
+) -> bool {
+	idx := push_node(ctx)
+	{
+		n := &ctx.nodes[idx]
+		n.id = id
+		n.traits = {.Press, .Text}
+		n.text = text
+		n.text_size = DEFAULT_TEXT_SIZE
+		n.color = color
+		n.constraints.pref_size = size
+	}
+	return ctx.active == id && .Left in ctx.input.buttons_released && ctx.hot == id
+}
+
+// A boolean checkbox. Toggles `value` on click; returns true when it changed.
 checkbox :: proc(
 	ctx: ^Context,
-	parent: Handle,
-	checked := false,
+	id: string,
+	value: ^bool,
 	size := vec2{22, 22},
 	color := CHECK_COLOR,
-) -> Handle {
-	h := new_child(ctx, parent)
-	c := get_component(ctx, h)
-	c.traits += {.Toggle}
-	c.value = 1 if checked else 0
-	c.constraints.pref_size = size
-	c.color = color
-	return h
+) -> bool {
+	wid := get_id(id)
+	idx := push_node(ctx)
+	{
+		n := &ctx.nodes[idx]
+		n.id = wid
+		n.traits = {.Toggle}
+		n.value = 1 if value^ else 0
+		n.constraints.pref_size = size
+		n.color = color
+	}
+	changed := false
+	if ctx.active == wid && .Left in ctx.input.buttons_released && ctx.hot == wid {
+		value^ = !value^
+		ctx.nodes[idx].value = 1 if value^ else 0
+		changed = true
+	}
+	return changed
 }
 
-// A boolean switch. Identical behavior to `checkbox` (a Toggle); a wider
-// default size signals the switch look to the renderer.
+// A boolean switch. Same behavior as checkbox; wider default size cues the
+// switch look to the renderer.
 toggle_switch :: proc(
 	ctx: ^Context,
-	parent: Handle,
-	on := false,
+	id: string,
+	value: ^bool,
 	size := vec2{44, 22},
 	color := CHECK_COLOR,
-) -> Handle {
-	h := new_child(ctx, parent)
-	c := get_component(ctx, h)
-	c.traits += {.Toggle}
-	c.value = 1 if on else 0
-	c.constraints.pref_size = size
-	c.color = color
-	return h
+) -> bool {
+	wid := get_id(id)
+	idx := push_node(ctx)
+	{
+		n := &ctx.nodes[idx]
+		n.id = wid
+		n.traits = {.Toggle}
+		n.value = 1 if value^ else 0
+		n.constraints.pref_size = size
+		n.color = color
+	}
+	changed := false
+	if ctx.active == wid && .Left in ctx.input.buttons_released && ctx.hot == wid {
+		value^ = !value^
+		ctx.nodes[idx].value = 1 if value^ else 0
+		changed = true
+	}
+	return changed
 }
 
-// A horizontal slider. Dragging sets `value` in [0,1]; starts at `value`
-// (clamped). Read it back via get_component(ctx, h).value.
+// A horizontal slider in [0,1]. Dragging sets `value`; returns true when it
+// changed this frame.
 slider :: proc(
 	ctx: ^Context,
-	parent: Handle,
-	value := f32(0),
+	id: string,
+	value: ^f32,
 	size := vec2{160, 20},
 	color := SLIDER_COLOR,
-) -> Handle {
-	h := new_child(ctx, parent)
-	c := get_component(ctx, h)
-	c.traits += {.Slide}
-	c.value = clamp(value, 0, 1)
-	c.constraints.pref_size = size
-	c.color = color
-	return h
-}
-
-// A horizontal flow container. Children added under the returned handle are
-// laid out left to right with `gap` between them. Size it via its constraints.
-row :: proc(ctx: ^Context, parent: Handle, gap: f32 = 0, padding := Sides{}) -> Handle {
-	h := new_child(ctx, parent)
-	get_component(ctx, h).layout = Layout {
-		kind    = .Row,
-		gap     = {gap, 0},
-		padding = padding,
+) -> bool {
+	wid := get_id(id)
+	idx := push_node(ctx)
+	{
+		n := &ctx.nodes[idx]
+		n.id = wid
+		n.traits = {.Slide}
+		n.constraints.pref_size = size
+		n.color = color
 	}
-	return h
-}
-
-// A vertical flow container (top to bottom, `gap` between items).
-column :: proc(ctx: ^Context, parent: Handle, gap: f32 = 0, padding := Sides{}) -> Handle {
-	h := new_child(ctx, parent)
-	get_component(ctx, h).layout = Layout {
-		kind    = .Column,
-		gap     = {0, gap},
-		padding = padding,
+	changed := false
+	if ctx.active == wid && .Left in ctx.input.buttons_down {
+		if r, ok := prev_rect(ctx, wid); ok && r.size.x > 0 {
+			t := clamp((ctx.input.mouse_pos.x - r.pos.x) / r.size.x, 0, 1)
+			if t != value^ {
+				value^ = t
+				changed = true
+			}
+		}
 	}
-	return h
-}
-
-// A grid flow container with a fixed `columns` count; items wrap left to right.
-grid :: proc(
-	ctx: ^Context,
-	parent: Handle,
-	columns: i32,
-	gap := vec2{0, 0},
-	padding := Sides{},
-) -> Handle {
-	h := new_child(ctx, parent)
-	get_component(ctx, h).layout = Layout {
-		kind    = .Grid,
-		columns = columns,
-		gap     = gap,
-		padding = padding,
-	}
-	return h
+	ctx.nodes[idx].value = clamp(value^, 0, 1)
+	return changed
 }

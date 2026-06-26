@@ -3,55 +3,68 @@ package wynn_test
 import "core:testing"
 import wynn ".."
 
+// Immediate mode has no `visible` flag: a node is "hidden" simply by not
+// emitting it that frame. These tests cover that emission semantics plus the
+// mouse_over_ui query (both resolve against the previous frame's geometry).
+
+Vis_State :: struct {
+	emit: bool,
+}
+
+// A button "ok" at the origin, size {100,30}, emitted only when st.emit.
+build_toggle_btn :: proc(ctx: ^wynn.Context, st: ^Vis_State) {
+	if st.emit {
+		wynn.button(ctx, "ok", "OK", {100, 30})
+		wynn.anchor(ctx, {.Left, .Top})
+	}
+}
+
 @(test)
 test_mouse_over_ui :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st := Vis_State{emit = true}
 
-	btn := wynn.button(ctx, ctx.screen, "OK", size = {100, 30}) // at {0,0 .. 100,30}
-	wynn.process_ui(ctx)
+	frame(ctx, build_toggle_btn, &st) // geometry; button at {0,0 .. 100,30}
 
 	// over the button -> true
 	wynn.input_mouse_move(ctx, {20, 15})
-	wynn.process_input(ctx)
+	frame(ctx, build_toggle_btn, &st)
 	testing.expect(t, wynn.mouse_over_ui(ctx))
 
-	// over empty background (resolves to the screen root) -> false
+	// over empty background -> false
 	wynn.input_mouse_move(ctx, {400, 400})
-	wynn.process_input(ctx)
+	frame(ctx, build_toggle_btn, &st)
 	testing.expect(t, !wynn.mouse_over_ui(ctx))
 
 	// outside the window entirely -> false
 	wynn.input_mouse_move(ctx, {-5, -5})
-	wynn.process_input(ctx)
+	frame(ctx, build_toggle_btn, &st)
 	testing.expect(t, !wynn.mouse_over_ui(ctx))
 
-	// hidden component does not count (hit-testing skips it)
-	wynn.get_component(ctx, btn).visible = false
-	wynn.process_ui(ctx)
+	// stop emitting the button: once it leaves the previous frame, the cursor is
+	// over the background again. One frame to drop it from geometry, one to read.
+	st.emit = false
 	wynn.input_mouse_move(ctx, {20, 15})
-	wynn.process_input(ctx)
+	frame(ctx, build_toggle_btn, &st)
+	frame(ctx, build_toggle_btn, &st)
 	testing.expect(t, !wynn.mouse_over_ui(ctx))
 }
 
-// A hidden parent hides its whole subtree for hit-testing too (not just render).
 @(test)
-test_hidden_parent_blocks_child_hit :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+test_unemitted_node_not_hit :: proc(t: ^testing.T) {
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st := Vis_State{emit = true}
 
-	parent := wynn.new_child(ctx, ctx.screen)
-	wynn.get_component(ctx, parent).constraints.pref_size = {200, 200}
-	child := wynn.new_child(ctx, parent)
-	cc := wynn.get_component(ctx, child)
-	cc.constraints.pref_size = {50, 50}
-	cc.rect.pos = {10, 10}
-	wynn.process_ui(ctx)
+	// two frames so prev_nodes holds the emitted button (index 1)
+	frame(ctx, build_toggle_btn, &st)
+	frame(ctx, build_toggle_btn, &st)
+	testing.expect_value(t, wynn.hit_test(ctx, {20, 15}), 1)
 
-	// child resolves to {10,10 .. 60,60}; a point in it hits the child
-	testing.expect_value(t, wynn.hit_test(ctx, {20, 20}), child)
-
-	// hiding the parent makes the point fall through to the screen background
-	wynn.get_component(ctx, parent).visible = false
-	testing.expect_value(t, wynn.hit_test(ctx, {20, 20}), ctx.screen)
+	// stop emitting it; after it clears from prev_nodes the point falls through
+	st.emit = false
+	frame(ctx, build_toggle_btn, &st)
+	frame(ctx, build_toggle_btn, &st)
+	testing.expect_value(t, wynn.hit_test(ctx, {20, 15}), wynn.NO_NODE)
 }
