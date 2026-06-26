@@ -1,6 +1,6 @@
 # wynn
 
-A small **retained-mode UI layout library** written in [Odin](https://odin-lang.org/).
+A small **immediate-mode UI layout library** written in [Odin](https://odin-lang.org/).
 
 wynn keeps the whole UI as a tree of components in a fixed-size pool, referenced
 by **generational handles** (not pointers) over an **intrusive parent/child
