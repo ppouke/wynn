@@ -5,50 +5,52 @@ import "core:mem"
 // ----------------------------------------------------------------------------
 // Render-data emission
 //
-// Walks the resolved tree top-down in painter's order (parent before child,
-// siblings first -> last, so the last sibling draws on top) and produces a
-// flat slice with one Render_Data entry per visible component. An invisible
-// node hides its whole subtree. The screen root is not emitted; emission
-// starts at its children.
+// The node arena is built in creation order, which is painter order (a parent
+// is pushed before its children, siblings in call order), so we can emit it as
+// a flat slice by index — index 0 (screen root) is skipped. Pressable nodes are
+// emitted slightly darkened while held (active), giving free press feedback.
 //
-// The returned slice is allocated with `allocator`; the caller owns it and
-// frees it (e.g. `delete(data, allocator)`) when done.
+// The returned slice is allocated with `allocator`; the caller frees it.
 // ----------------------------------------------------------------------------
+
+// RGB multiplier applied to a pressable node's color while it is held.
+PRESS_DARKEN :: 0.82
 
 render :: proc(ctx: ^Context, allocator: mem.Allocator) -> []Render_Data {
 	out := make([dynamic]Render_Data, allocator)
 
-	child := get_component(ctx, ctx.screen).first_child
-	for !handle_is_null(child) {
-		emit_node(ctx, child, &out)
-		child = get_component(ctx, child).next_sibling
+	max_layer := 0
+	for n in ctx.nodes {
+		if n.layer > max_layer {
+			max_layer = n.layer
+		}
+	}
+
+	// Emit layer by layer (low first) so overlays draw on top; array order is
+	// painter order within a layer.
+	for layer in 0 ..= max_layer {
+		for i in 1 ..< len(ctx.nodes) {
+			n := ctx.nodes[i]
+			if n.layer != layer {
+				continue
+			}
+			color := n.color
+			if .Press in n.traits && n.id != 0 && n.id == ctx.active {
+				color *= vec4{PRESS_DARKEN, PRESS_DARKEN, PRESS_DARKEN, 1}
+			}
+			append(
+				&out,
+				Render_Data {
+					traits = n.traits,
+					rect = n.global_rect,
+					color = color,
+					text = n.text,
+					text_size = n.text_size,
+					value = n.value,
+				},
+			)
+		}
 	}
 
 	return out[:]
-}
-
-@(private = "file")
-emit_node :: proc(ctx: ^Context, handle: Handle, out: ^[dynamic]Render_Data) {
-	c := get_component(ctx, handle)
-	if !c.visible {
-		return // hidden node hides its subtree
-	}
-
-	append(
-		out,
-		Render_Data {
-			traits = c.traits,
-			rect = c.global_rect,
-			color = c.color,
-			text = c.text,
-			text_size = c.text_size,
-			value = c.value,
-		},
-	)
-
-	child := c.first_child
-	for !handle_is_null(child) {
-		emit_node(ctx, child, out)
-		child = get_component(ctx, child).next_sibling
-	}
 }

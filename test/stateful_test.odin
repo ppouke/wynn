@@ -3,79 +3,93 @@ package wynn_test
 import "core:testing"
 import wynn ".."
 
-click_at :: proc(ctx: ^wynn.Context, p: wynn.vec2) {
-	wynn.input_mouse_move(ctx, p)
-	wynn.input_mouse_button_down(ctx, .Left)
-	wynn.process_input(ctx)
-	wynn.input_mouse_button_up(ctx, .Left)
-	wynn.process_input(ctx)
+// Stateful widgets own no state in wynn: the app passes a pointer and the widget
+// mutates it. Tests assert against that caller-owned value.
+
+Bool_State :: struct {
+	v: bool,
+}
+
+// A checkbox "cb" pinned at {10,10} size {20,20} (center {20,20}).
+build_checkbox :: proc(ctx: ^wynn.Context, st: ^Bool_State) {
+	wynn.checkbox(ctx, "cb", &st.v, {20, 20})
+	wynn.anchor(ctx, {.Left, .Top}, {left = 10, top = 10})
 }
 
 @(test)
 test_checkbox_toggles :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st := Bool_State{v = false}
 
-	cb := wynn.checkbox(ctx, ctx.screen, checked = false, size = {20, 20})
-	wynn.get_component(ctx, cb).rect.pos = {10, 10}
-	wynn.process_ui(ctx)
+	frame(ctx, build_checkbox, &st) // geometry
 
-	testing.expect_value(t, wynn.get_component(ctx, cb).value, f32(0))
-	click_at(ctx, {15, 15})
-	testing.expect_value(t, wynn.get_component(ctx, cb).value, f32(1)) // now checked
-	click_at(ctx, {15, 15})
-	testing.expect_value(t, wynn.get_component(ctx, cb).value, f32(0)) // back off
+	click(ctx, {20, 20}, build_checkbox, &st)
+	testing.expect(t, st.v) // now checked
+
+	click(ctx, {20, 20}, build_checkbox, &st)
+	testing.expect(t, !st.v) // back off
+}
+
+// A switch "sw" pinned at the origin, size {44,22} (center {22,11}).
+build_switch :: proc(ctx: ^wynn.Context, st: ^Bool_State) {
+	wynn.toggle_switch(ctx, "sw", &st.v, {44, 22})
+	wynn.anchor(ctx, {.Left, .Top})
 }
 
 @(test)
 test_switch_toggles :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st := Bool_State{v = true}
 
-	sw := wynn.toggle_switch(ctx, ctx.screen, on = true, size = {44, 22})
-	wynn.get_component(ctx, sw).rect.pos = {0, 0}
-	wynn.process_ui(ctx)
+	frame(ctx, build_switch, &st) // geometry
 
-	testing.expect_value(t, wynn.get_component(ctx, sw).value, f32(1))
-	click_at(ctx, {20, 10})
-	testing.expect_value(t, wynn.get_component(ctx, sw).value, f32(0))
+	click(ctx, {22, 11}, build_switch, &st)
+	testing.expect(t, !st.v)
+}
+
+Slider_State :: struct {
+	val: f32,
+}
+
+// A slider "s" pinned at {100,50} size {200,20} (track spans x in [100,300]).
+build_slider :: proc(ctx: ^wynn.Context, st: ^Slider_State) {
+	wynn.slider(ctx, "s", &st.val, {200, 20})
+	wynn.anchor(ctx, {.Left, .Top}, {left = 100, top = 50})
 }
 
 @(test)
 test_slider_sets_value_from_cursor :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st := Slider_State{val = 0}
 
-	s := wynn.slider(ctx, ctx.screen, value = 0, size = {200, 20})
-	wynn.get_component(ctx, s).rect.pos = {100, 50}
-	wynn.process_ui(ctx) // slider track spans x in [100, 300]
+	frame(ctx, build_slider, &st) // geometry; track spans x in [100, 300]
 
 	// press at the middle of the track -> value ~0.5
-	wynn.input_mouse_move(ctx, {200, 60})
-	wynn.input_mouse_button_down(ctx, .Left)
-	wynn.process_input(ctx)
-	testing.expect_value(t, wynn.get_component(ctx, s).value, f32(0.5))
+	press_frame(ctx, {200, 60}, build_slider, &st)
+	testing.expect_value(t, st.val, f32(0.5))
 
-	// drag to the far right -> clamped to 1
+	// drag to the far right -> clamped to 1 (still held)
 	wynn.input_mouse_move(ctx, {400, 60})
-	wynn.process_input(ctx)
-	testing.expect_value(t, wynn.get_component(ctx, s).value, f32(1))
+	frame(ctx, build_slider, &st)
+	testing.expect_value(t, st.val, f32(1))
 
-	// release; drag past left while not held does nothing
+	// release; moving while not held does nothing
 	wynn.input_mouse_button_up(ctx, .Left)
-	wynn.process_input(ctx)
 	wynn.input_mouse_move(ctx, {0, 60})
-	wynn.process_input(ctx)
-	testing.expect_value(t, wynn.get_component(ctx, s).value, f32(1)) // unchanged after release
+	frame(ctx, build_slider, &st)
+	testing.expect_value(t, st.val, f32(1)) // unchanged after release
 }
 
 @(test)
 test_slider_emits_value :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st := Slider_State{val = 0.25}
 
-	s := wynn.slider(ctx, ctx.screen, value = 0.25)
-	wynn.process_ui(ctx)
+	frame(ctx, build_slider, &st)
 
 	data := wynn.render(ctx, context.allocator)
 	defer delete(data, context.allocator)

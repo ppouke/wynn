@@ -2,102 +2,101 @@ package wynn_test
 
 import "core:testing"
 import wynn ".."
+import cl "../components_library"
 
-// Component occupying {100,100 .. 200,200} on screen.
-box :: proc(ctx: ^wynn.Context, traits: wynn.Traits = {}) -> wynn.Handle {
-	h := make(ctx, ctx.screen, wynn.Constraints{pref_size = {100, 100}})
-	c := wynn.get_component(ctx, h)
-	c.rect.pos = {100, 100}
-	c.traits = traits
-	wynn.process_ui(ctx)
-	return h
+Box_State :: struct {
+	clicked: bool,
+}
+
+// A button "box" pinned at {100,100} size {100,100} (center {150,150}).
+build_box :: proc(ctx: ^wynn.Context, st: ^Box_State) {
+	st.clicked = wynn.button(ctx, "box", "B", {100, 100})
+	wynn.anchor(ctx, {.Left, .Top}, {left = 100, top = 100})
 }
 
 @(test)
 test_hover :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
-	h := box(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st: Box_State
+	boxid := wynn.get_id("box")
+
+	frame(ctx, build_box, &st) // establish geometry
 
 	wynn.input_mouse_move(ctx, {150, 150})
-	wynn.process_input(ctx)
-	testing.expect(t, wynn.is_hovered(ctx, h))
+	frame(ctx, build_box, &st)
+	testing.expect(t, wynn.is_hot(ctx, boxid))
 
 	wynn.input_mouse_move(ctx, {10, 10})
-	wynn.process_input(ctx)
-	testing.expect(t, !wynn.is_hovered(ctx, h))
+	frame(ctx, build_box, &st)
+	testing.expect(t, !wynn.is_hot(ctx, boxid))
 }
 
 @(test)
 test_click_press_release_same :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
-	h := box(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st: Box_State
+	boxid := wynn.get_id("box")
 
-	wynn.input_mouse_move(ctx, {150, 150})
-	wynn.input_mouse_button_down(ctx, .Left)
-	wynn.process_input(ctx)
-	testing.expect(t, wynn.is_active(ctx, h))
-	testing.expect(t, wynn.is_focused(ctx, h))
-	testing.expect(t, !wynn.was_clicked(ctx, h)) // not yet, still held
+	frame(ctx, build_box, &st) // geometry
 
-	wynn.input_mouse_button_up(ctx, .Left)
-	wynn.process_input(ctx)
-	testing.expect(t, wynn.was_clicked(ctx, h))
-	testing.expect(t, !wynn.is_active(ctx, h)) // capture released
+	press_frame(ctx, {150, 150}, build_box, &st)
+	testing.expect(t, wynn.is_active(ctx, boxid))
+	testing.expect(t, !st.clicked) // still held, no click yet
+
+	release_frame(ctx, build_box, &st)
+	testing.expect(t, st.clicked)
+	testing.expect(t, !wynn.is_active(ctx, boxid)) // capture released
 }
 
 @(test)
 test_no_click_when_release_elsewhere :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
-	h := box(ctx)
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st: Box_State
 
-	wynn.input_mouse_move(ctx, {150, 150})
-	wynn.input_mouse_button_down(ctx, .Left)
-	wynn.process_input(ctx)
+	frame(ctx, build_box, &st) // geometry
+	press_frame(ctx, {150, 150}, build_box, &st)
 
-	// move off the component, then release
+	// move off the box, then release -> hover is elsewhere, so no click
 	wynn.input_mouse_move(ctx, {10, 10})
 	wynn.input_mouse_button_up(ctx, .Left)
-	wynn.process_input(ctx)
+	frame(ctx, build_box, &st)
 
-	testing.expect(t, !wynn.was_clicked(ctx, h))
-	testing.expect_value(t, ctx.clicked, wynn.NULL_HANDLE)
+	testing.expect(t, !st.clicked)
+}
+
+Drag_State :: struct {
+	pos: wynn.vec2,
+}
+
+// A floating window (overlay) whose body drag updates st.pos via the Move trait.
+build_win :: proc(ctx: ^wynn.Context, st: ^Drag_State) {
+	cl.begin_floating(ctx, "win", &st.pos, {100, 100}, layout = wynn.Layout{})
+	cl.end_floating(ctx)
 }
 
 @(test)
-test_drag_moves_component_with_move_trait :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
-	h := box(ctx, {.Move})
+test_drag_moves_floating_window :: proc(t: ^testing.T) {
+	ctx := wynn.initialize(context.allocator, SCREEN)
+	defer wynn.destroy(ctx)
+	st := Drag_State{pos = {100, 100}} // body covers {100,100 .. 200,200}
 
-	// establish position, then press
+	frame(ctx, build_win, &st) // geometry
+
+	// position the cursor over the body (so the next press captures it), letting
+	// end_frame clear the motion delta before the drag begins
 	wynn.input_mouse_move(ctx, {150, 150})
-	wynn.process_input(ctx)
+	frame(ctx, build_win, &st)
+
+	// press: captures the window, but with zero delta so it does not move yet
 	wynn.input_mouse_button_down(ctx, .Left)
-	wynn.process_input(ctx)
+	frame(ctx, build_win, &st)
+	testing.expect_value(t, st.pos, wynn.vec2{100, 100})
 
 	// drag by (10, 20) while held
 	wynn.input_mouse_move(ctx, {160, 170})
-	wynn.process_input(ctx)
-
-	testing.expect_value(t, wynn.get_component(ctx, h).rect.pos, wynn.vec2{110, 120})
-}
-
-@(test)
-test_drag_ignored_without_move_trait :: proc(t: ^testing.T) {
-	ctx := wynn.initialize(context.allocator, {800, 600})
-	defer free(ctx)
-	h := box(ctx) // no traits
-
-	wynn.input_mouse_move(ctx, {150, 150})
-	wynn.process_input(ctx)
-	wynn.input_mouse_button_down(ctx, .Left)
-	wynn.process_input(ctx)
-
-	wynn.input_mouse_move(ctx, {160, 170})
-	wynn.process_input(ctx)
-
-	testing.expect_value(t, wynn.get_component(ctx, h).rect.pos, wynn.vec2{100, 100})
+	frame(ctx, build_win, &st)
+	testing.expect_value(t, st.pos, wynn.vec2{110, 120})
 }
