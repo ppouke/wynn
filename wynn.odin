@@ -22,6 +22,12 @@ NO_NODE :: -1
 // string id. 0 means "non-interactive" (the default).
 ID :: distinct u64
 
+// Opaque reference to a host-owned image/texture. The library never touches the
+// pixels; it only forwards this handle to the renderer, which maps it to its own
+// texture. 0 means "no image". The host decides what the bits mean (e.g. a GL
+// texture name, or an index into a host-side image table).
+Image_Handle :: distinct u32
+
 Traits :: distinct bit_set[Trait]
 Trait :: enum {
 	Move,
@@ -100,8 +106,21 @@ Node :: struct {
 	text:         string,
 	text_size:    f32,
 	value:        f32,
+	image:        Image_Handle, // 0 = none; host-owned texture for .Icon nodes
 	id:           ID,  // 0 = non-interactive
 	layer:        int, // 0 = normal; higher = overlay (drawn/hit above lower)
+}
+
+// Outcome of an interactive control, filled according to its traits:
+//   .Press  → hovered / held / clicked
+//   .Toggle → flips the bound bool, sets changed
+//   .Slide  → sets the bound f32 from the cursor, sets changed
+// Fields for traits the control does not have stay false.
+Interaction :: struct {
+	hovered: bool,
+	held:    bool,
+	clicked: bool,
+	changed: bool,
 }
 
 // Flat draw record emitted by `render`, consumed by the host's renderer.
@@ -112,6 +131,7 @@ Render_Data :: struct {
 	text:      string,
 	text_size: f32,
 	value:     f32,
+	image:     Image_Handle,
 }
 
 Context :: struct {

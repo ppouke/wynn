@@ -84,6 +84,101 @@ label :: proc(
 	n.constraints.pref_size = size
 }
 
+// A non-interactive image. `handle` is an opaque host-owned texture reference
+// (see Image_Handle); the renderer maps it to its own texture. `tint` multiplies
+// the image color (WHITE = untinted). Sized/placed by `size` like any leaf.
+image :: proc(
+	ctx: ^Context,
+	handle: Image_Handle,
+	size: vec2,
+	tint := WHITE,
+) {
+	control(ctx, 0, {.Icon}, size, color = tint, image = handle)
+}
+
+// The trait-driven core behind every interactive widget. Pushes a node with the
+// given traits/visuals, then evaluates its Interaction from those traits — so
+// callers can compose behaviours (e.g. {.Icon, .Press} for a clickable image).
+// `id` of 0 makes it non-interactive. `toggle`/`slide` bind the value for the
+// .Toggle / .Slide traits.
+control :: proc(
+	ctx: ^Context,
+	id: ID,
+	traits: Traits,
+	size: vec2,
+	color := vec4{},
+	text := "",
+	text_size := DEFAULT_TEXT_SIZE,
+	image := Image_Handle(0),
+	toggle: ^bool = nil,
+	slide: ^f32 = nil,
+) -> (result: Interaction) {
+	idx := push_node(ctx)
+	{
+		n := &ctx.nodes[idx]
+		n.id = id
+		n.traits = traits
+		n.constraints.pref_size = size
+		// An image with no tint set would be multiplied by transparent black and
+		// vanish, so default .Icon tint to white.
+		n.color = color
+		if .Icon in traits && color == {} {
+			n.color = WHITE
+		}
+		n.text = text
+		n.text_size = text_size
+		n.image = image
+		if .Toggle in traits && toggle != nil {
+			n.value = 1 if toggle^ else 0
+		}
+	}
+
+	hot := ctx.hot == id
+	released_over := ctx.active == id && .Left in ctx.input.buttons_released && hot
+
+	if .Press in traits {
+		result.hovered = hot
+		result.held = ctx.active == id && .Left in ctx.input.buttons_down
+		result.clicked = released_over
+	}
+	if .Toggle in traits && toggle != nil {
+		if released_over {
+			toggle^ = !toggle^
+			result.changed = true
+		}
+		ctx.nodes[idx].value = 1 if toggle^ else 0
+	}
+	if .Slide in traits && slide != nil {
+		if ctx.active == id && .Left in ctx.input.buttons_down {
+			if r, ok := prev_rect(ctx, id); ok && r.size.x > 0 {
+				t := clamp((ctx.input.mouse_pos.x - r.pos.x) / r.size.x, 0, 1)
+				if t != slide^ {
+					slide^ = t
+					result.changed = true
+				}
+			}
+		}
+		ctx.nodes[idx].value = clamp(slide^, 0, 1)
+	}
+	return
+}
+
+// Convenience wrapper around `control` taking a string id (hashed for you).
+widget :: proc(
+	ctx: ^Context,
+	id: string,
+	traits: Traits,
+	size: vec2,
+	color := vec4{},
+	text := "",
+	text_size := DEFAULT_TEXT_SIZE,
+	image := Image_Handle(0),
+	toggle: ^bool = nil,
+	slide: ^f32 = nil,
+) -> Interaction {
+	return control(ctx, get_id(id), traits, size, color, text, text_size, image, toggle, slide)
+}
+
 // A clickable, labelled box. Returns true on the frame it is clicked.
 button :: proc(
 	ctx: ^Context,
@@ -104,17 +199,7 @@ button_id :: proc(
 	size := vec2{96, 32},
 	color := BUTTON_COLOR,
 ) -> bool {
-	idx := push_node(ctx)
-	{
-		n := &ctx.nodes[idx]
-		n.id = id
-		n.traits = {.Press, .Text}
-		n.text = text
-		n.text_size = DEFAULT_TEXT_SIZE
-		n.color = color
-		n.constraints.pref_size = size
-	}
-	return ctx.active == id && .Left in ctx.input.buttons_released && ctx.hot == id
+	return control(ctx, id, {.Press, .Text}, size, color = color, text = text).clicked
 }
 
 // A boolean checkbox. Toggles `value` on click; returns true when it changed.
@@ -125,23 +210,7 @@ checkbox :: proc(
 	size := vec2{22, 22},
 	color := CHECK_COLOR,
 ) -> bool {
-	wid := get_id(id)
-	idx := push_node(ctx)
-	{
-		n := &ctx.nodes[idx]
-		n.id = wid
-		n.traits = {.Toggle}
-		n.value = 1 if value^ else 0
-		n.constraints.pref_size = size
-		n.color = color
-	}
-	changed := false
-	if ctx.active == wid && .Left in ctx.input.buttons_released && ctx.hot == wid {
-		value^ = !value^
-		ctx.nodes[idx].value = 1 if value^ else 0
-		changed = true
-	}
-	return changed
+	return control(ctx, get_id(id), {.Toggle}, size, color = color, toggle = value).changed
 }
 
 // A boolean switch. Same behavior as checkbox; wider default size cues the
@@ -153,23 +222,7 @@ toggle_switch :: proc(
 	size := vec2{44, 22},
 	color := CHECK_COLOR,
 ) -> bool {
-	wid := get_id(id)
-	idx := push_node(ctx)
-	{
-		n := &ctx.nodes[idx]
-		n.id = wid
-		n.traits = {.Toggle}
-		n.value = 1 if value^ else 0
-		n.constraints.pref_size = size
-		n.color = color
-	}
-	changed := false
-	if ctx.active == wid && .Left in ctx.input.buttons_released && ctx.hot == wid {
-		value^ = !value^
-		ctx.nodes[idx].value = 1 if value^ else 0
-		changed = true
-	}
-	return changed
+	return control(ctx, get_id(id), {.Toggle}, size, color = color, toggle = value).changed
 }
 
 // A horizontal slider in [0,1]. Dragging sets `value`; returns true when it
@@ -181,25 +234,5 @@ slider :: proc(
 	size := vec2{160, 20},
 	color := SLIDER_COLOR,
 ) -> bool {
-	wid := get_id(id)
-	idx := push_node(ctx)
-	{
-		n := &ctx.nodes[idx]
-		n.id = wid
-		n.traits = {.Slide}
-		n.constraints.pref_size = size
-		n.color = color
-	}
-	changed := false
-	if ctx.active == wid && .Left in ctx.input.buttons_down {
-		if r, ok := prev_rect(ctx, wid); ok && r.size.x > 0 {
-			t := clamp((ctx.input.mouse_pos.x - r.pos.x) / r.size.x, 0, 1)
-			if t != value^ {
-				value^ = t
-				changed = true
-			}
-		}
-	}
-	ctx.nodes[idx].value = clamp(value^, 0, 1)
-	return changed
+	return control(ctx, get_id(id), {.Slide}, size, color = color, slide = value).changed
 }

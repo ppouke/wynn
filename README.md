@@ -26,10 +26,13 @@ demo lives in `demo/` as a reference host.
 - **Interaction** — hover, mouse capture, focus, click; widgets resolve their
   own gestures (button click, slider drag, checkbox/switch toggle, window move)
   against **caller-owned** state.
-- **Widgets** — containers (`begin_row`/`begin_column`/`begin_grid`/`begin_panel`),
-  leaves (`label`, `button`, `checkbox`, `toggle_switch`, `slider`), plus a
-  `toolbar` + dropdown `menu` and a `floating` window — all thin sugar over the
-  core (no special-casing in the solver/renderer/input passes).
+- **Trait-driven widgets** — a single `control(id, traits, …) -> Interaction`
+  core emits a node and evaluates its outcome per trait (`.Press` → `clicked`,
+  `.Toggle`/`.Slide` → `changed`). `label`, `button`, `checkbox`, `toggle_switch`,
+  `slider`, and `image` are thin wrappers over it, and traits **compose** — e.g.
+  `{.Icon, .Press}` is a clickable image. Plus containers (`begin_row`/`begin_column`/
+  `begin_grid`/`begin_panel`), a `toolbar` + dropdown `menu`, and a `floating`
+  window — all sugar over the core (no special-casing in the solver/renderer/input).
 
 ## Quick start
 
@@ -101,6 +104,16 @@ if wynn.slider(ctx, "vol", &app.volume) {
 Each interactive widget needs an explicit string `id` that is unique among its
 siblings; derive distinct ids for loop-generated widgets.
 
+The named widgets are thin wrappers over a trait-driven `control` that returns an
+`Interaction { hovered, held, clicked, changed }`. Traits **compose**, so you can
+build new widgets without bespoke procs — a clickable image is just:
+
+```odin
+if wynn.widget(ctx, "thumb", {.Icon, .Press}, {64, 64}, image = handle).clicked {
+	// thumbnail clicked this frame
+}
+```
+
 ## Building & running
 
 Requires the Odin compiler (the demo uses the bundled `vendor:sdl3`,
@@ -131,7 +144,7 @@ grid of colour swatches, and a draggable floating window.
 | File | Responsibility |
 |------|----------------|
 | `wynn.odin` | `Context`, `Node`, `ID`, `Rect`, `Constraints`, `Layout`; frame lifecycle + transient tree construction |
-| `core.odin` | immediate-mode widgets (label/button/checkbox/toggle_switch/slider, begin_row/column/grid/panel, anchor) |
+| `core.odin` | trait-driven `control`/`widget` core + `Interaction`; widgets (label/button/checkbox/toggle_switch/slider/image, begin_row/column/grid/panel, anchor) |
 | `layout.odin` | measure/arrange solver, flow containers, `rect_contains` |
 | `input.odin` | input feed, hover + hit-testing against the previous frame, interaction queries |
 | `render.odin` | `render` — emits `[]Render_Data` in painter order (low layers first) |

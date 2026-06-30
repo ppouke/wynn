@@ -20,6 +20,7 @@ App :: struct {
 	open_menu: wynn.ID,
 	win_pos:   wynn.vec2,
 	action:    string,
+	image:     wynn.Image_Handle,
 }
 
 FILE_ITEMS :: []string{"New", "Open", "Save", "Quit"}
@@ -77,12 +78,17 @@ build_ui :: proc(ctx: ^wynn.Context, app: ^App) {
 		wynn.label(ctx, "Switch", 16, wynn.WHITE, {72, 22})
 		wynn.end_row(ctx)
 
-		wynn.begin_grid(ctx, 4, gap = {6, 6}, constraints = {pref_size = {288, 60}})
+		wynn.begin_grid(ctx, 2, gap = {6, 6}, constraints = {pref_size = {288, 60}})
 		for c in SWATCHES {
 			wynn.begin_panel(ctx, color = c, layout = {}, constraints = {pref_size = {64, 28}})
 			wynn.end_panel(ctx)
 		}
 		wynn.end_grid(ctx)
+
+		wynn.begin_row(ctx, gap = 10, constraints = {pref_size = {288, 64}})
+		wynn.image(ctx, app.image, {64, 64})
+		wynn.label(ctx, "image()", 16, wynn.WHITE, {120, 64})
+		wynn.end_row(ctx)
 	}
 	wynn.end_panel(ctx)
 
@@ -104,7 +110,14 @@ build_ui :: proc(ctx: ^wynn.Context, app: ^App) {
 
 build_vertices :: proc(r: ^Renderer, data: []wynn.Render_Data) {
 	clear(&r.verts)
+	clear(&r.batches)
 	for rd in data {
+		// An image draws its host texture filling the rect, tinted by color.
+		if .Icon in rd.traits && rd.image != 0 {
+			push_image(r, u32(rd.image), rd.rect.pos.x, rd.rect.pos.y, rd.rect.size.x, rd.rect.size.y, rd.color)
+			continue
+		}
+
 		// Stateful widgets get composite visuals.
 		if .Slide in rd.traits {
 			draw_slider(r, rd.rect.pos.x, rd.rect.pos.y, rd.rect.size.x, rd.rect.size.y, rd.value)
@@ -178,6 +191,7 @@ main :: proc() {
 		checked = true,
 		win_pos = {300, 300},
 		action  = "Ready",
+		image   = wynn.Image_Handle(r.demo_image),
 	}
 
 	running := true

@@ -28,17 +28,33 @@ Vertex :: struct {
 	color: [4]f32,
 }
 
+// A contiguous run of vertices drawn with one texture and one sampling mode.
+// Atlas geometry (rects/text) coalesces into a single batch; each image quad,
+// which needs its own RGBA texture, becomes its own batch, preserving painter
+// order across the whole frame.
+Batch :: struct {
+	tex:   u32,
+	mode:  i32, // 0 = atlas (R8 alpha), 1 = image (RGBA)
+	start: int, // first vertex index
+}
+
+SAMPLE_ATLAS :: i32(0)
+SAMPLE_IMAGE :: i32(1)
+
 Renderer :: struct {
-	program:  u32,
-	vao:      u32,
-	vbo:      u32,
-	tex:      u32,
-	u_screen: i32,
-	u_tex:    i32,
-	verts:    [dynamic]Vertex,
-	cdata:    [NUM_CHARS]stbtt.bakedchar,
-	white_uv: [2]f32,
-	font_px:  f32,
+	program:    u32,
+	vao:        u32,
+	vbo:        u32,
+	tex:        u32,
+	demo_image: u32, // a procedural RGBA texture, shown by the image() widget
+	u_screen:   i32,
+	u_tex:      i32,
+	u_mode:     i32,
+	verts:      [dynamic]Vertex,
+	batches:    [dynamic]Batch,
+	cdata:      [NUM_CHARS]stbtt.bakedchar,
+	white_uv:   [2]f32,
+	font_px:    f32,
 }
 
 VERT_SRC :: `#version 330 core
@@ -61,10 +77,17 @@ FRAG_SRC :: `#version 330 core
 in vec2 v_uv;
 in vec4 v_color;
 uniform sampler2D u_tex;
+uniform int u_mode;
 out vec4 frag;
 void main() {
-	float a = texture(u_tex, v_uv).r;
-	frag = vec4(v_color.rgb, v_color.a * a);
+	if (u_mode == 0) {
+		// atlas: single-channel coverage, colored by the vertex color
+		float a = texture(u_tex, v_uv).r;
+		frag = vec4(v_color.rgb, v_color.a * a);
+	} else {
+		// image: full RGBA texel, tinted (multiplied) by the vertex color
+		frag = texture(u_tex, v_uv) * v_color;
+	}
 }
 `
 
@@ -121,6 +144,9 @@ renderer_init :: proc(r: ^Renderer) -> bool {
 	r.program = program
 	r.u_screen = gl.GetUniformLocation(r.program, "u_screen")
 	r.u_tex = gl.GetUniformLocation(r.program, "u_tex")
+	r.u_mode = gl.GetUniformLocation(r.program, "u_mode")
+
+	r.demo_image = make_demo_image()
 
 	// --- vertex buffer / layout ---
 	gl.GenVertexArrays(1, &r.vao)
@@ -136,6 +162,33 @@ renderer_init :: proc(r: ^Renderer) -> bool {
 	gl.BindVertexArray(0)
 
 	return true
+}
+
+// Builds a small procedural RGBA texture (a colored gradient with a checker
+// overlay) and uploads it, so the image() widget has something to show without
+// shipping an asset file. Returns the GL texture name, used as an Image_Handle.
+make_demo_image :: proc() -> u32 {
+	W, H :: 64, 64
+	pixels: [W * H][4]u8
+	for y in 0 ..< H {
+		for x in 0 ..< W {
+			checker := ((x / 8) + (y / 8)) % 2 == 0
+			r := u8(x * 255 / (W - 1))
+			g := u8(y * 255 / (H - 1))
+			b: u8 = checker ? 200 : 90
+			pixels[y * W + x] = {r, g, b, 255}
+		}
+	}
+
+	tex: u32
+	gl.GenTextures(1, &tex)
+	gl.BindTexture(gl.TEXTURE_2D, tex)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, &pixels[0])
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	return tex
 }
 
 load_font_data :: proc() -> []byte {
@@ -161,12 +214,33 @@ push_quad :: proc(r: ^Renderer, x0, y0, x1, y1, u0, v0, u1, v1: f32, col: [4]f32
 	)
 }
 
+// Ensures the trailing batch targets (tex, mode); opens a new one otherwise.
+// Consecutive atlas geometry coalesces into a single batch (one draw call).
+use_batch :: proc(r: ^Renderer, tex: u32, mode: i32) {
+	n := len(r.batches)
+	if n > 0 {
+		b := r.batches[n - 1]
+		if b.tex == tex && b.mode == mode {
+			return
+		}
+	}
+	append(&r.batches, Batch{tex = tex, mode = mode, start = len(r.verts)})
+}
+
 push_rect :: proc(r: ^Renderer, x, y, w, h: f32, col: [4]f32) {
+	use_batch(r, r.tex, SAMPLE_ATLAS)
 	u, v := r.white_uv.x, r.white_uv.y
 	push_quad(r, x, y, x + w, y + h, u, v, u, v, col)
 }
 
+// Draws a host image filling the rect, tinted by `col`, in its own batch.
+push_image :: proc(r: ^Renderer, tex: u32, x, y, w, h: f32, col: [4]f32) {
+	use_batch(r, tex, SAMPLE_IMAGE)
+	push_quad(r, x, y, x + w, y + h, 0, 0, 1, 1, col)
+}
+
 push_text :: proc(r: ^Renderer, text: string, x, y: f32, col: [4]f32) {
+	use_batch(r, r.tex, SAMPLE_ATLAS)
 	px, py := x, y
 	for ch in text {
 		if ch < FIRST_CHAR || ch >= FIRST_CHAR + NUM_CHARS {
@@ -236,11 +310,25 @@ renderer_flush :: proc(r: ^Renderer, screen_w, screen_h: f32) {
 	gl.UseProgram(r.program)
 	gl.Uniform2f(r.u_screen, screen_w, screen_h)
 	gl.ActiveTexture(gl.TEXTURE0)
-	gl.BindTexture(gl.TEXTURE_2D, r.tex)
 	gl.Uniform1i(r.u_tex, 0)
 
 	gl.BindVertexArray(r.vao)
 	gl.BindBuffer(gl.ARRAY_BUFFER, r.vbo)
 	gl.BufferData(gl.ARRAY_BUFFER, len(r.verts) * size_of(Vertex), raw_data(r.verts), gl.STREAM_DRAW)
-	gl.DrawArrays(gl.TRIANGLES, 0, i32(len(r.verts))) // single draw call
+
+	// One draw per batch. Atlas geometry is a single batch; image quads add one
+	// each, in painter order.
+	for b, i in r.batches {
+		end := len(r.verts)
+		if i + 1 < len(r.batches) {
+			end = r.batches[i + 1].start
+		}
+		count := end - b.start
+		if count == 0 {
+			continue
+		}
+		gl.BindTexture(gl.TEXTURE_2D, b.tex)
+		gl.Uniform1i(r.u_mode, b.mode)
+		gl.DrawArrays(gl.TRIANGLES, i32(b.start), i32(count))
+	}
 }

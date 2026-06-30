@@ -214,7 +214,7 @@ add/remove/reparent API and no persistent component the app holds onto.
   targeting the pressed widget even if the cursor leaves it.
 - **Click resolution:** a widget reports a click on the frame where it is
   `active`, the left button was released, and `hot` is still itself (press and
-  release on the same widget). See `button_id` in `core.odin`.
+  release on the same widget). Resolved once in `control` (`core.odin`).
 - **Stateful behavior is widget-resolved, app-owned state:** stateful widgets
   take their value **by pointer** (`checkbox`/`toggle_switch: ^bool`,
   `slider: ^f32`) and mutate it directly when active — the app owns the storage,
@@ -244,10 +244,16 @@ Two tiers, two packages:
     (flow), `begin_panel` (colored, Column by default). `anchor(edges, margins)`
     overrides the *most recently emitted* widget's placement within a `.None`
     parent (call it immediately after the widget).
+  - Trait-driven core: `control(id, traits, …) -> Interaction` (and `widget`, a
+    string-id wrapper) pushes a node and fills the `Interaction`
+    `{ hovered, held, clicked, changed }` **per trait** — `.Press` →
+    hovered/held/clicked, `.Toggle` flips a `^bool`, `.Slide` sets a `^f32`.
+    Traits compose, so `{.Icon, .Press}` is a clickable image with no bespoke proc.
   - Leaves: `label` (non-interactive text), `button`/`button_id` (returns true
     on click), `checkbox`/`toggle_switch` (`^bool`, returns changed),
-    `slider` (`^f32` in [0,1], returns changed). (`toggle_switch`, not `switch`
-    — Odin keyword.)
+    `slider` (`^f32` in [0,1], returns changed), `image` (a host texture handle,
+    tinted; `.Icon`, tint defaults to white). All are thin wrappers over `control`.
+    (`toggle_switch`, not `switch` — Odin keyword.)
 - **`components_library/`** (`package components_library`, imports `wynn`) —
   composite widgets, one file each, used as `cl.menu(…)` alongside
   `wynn.button(…)`. (Separate package because Odin makes every directory a
@@ -266,7 +272,9 @@ Two tiers, two packages:
   solver/render/input passes. A `button` is a node with `.Press`+`.Text` traits,
   a `pref_size`, and text; a row is a node with a `Row` layout. Stateful widgets
   are a node with a trait (`.Toggle`/`.Slide`) and a `value`, with state owned
-  by the caller's pointer.
+  by the caller's pointer. Interaction resolution lives once in `control`; named
+  widgets just choose the traits and visuals, so behaviours compose by trait
+  rather than by per-widget procs.
 - **Text storage:** a node carries `text`/`text_size`, copied into `Render_Data`
   by `render`. The host owns font metrics, measurement, and glyph drawing; wynn
   only stores and forwards the string + size (callers pass explicit `pref_size`).
@@ -308,13 +316,14 @@ exe). The library proper has no SDL/GL dependency.
    its peers (needs a stable per-overlay ordering, since array order is rebuilt
    each frame).
 6. **Iterative traversal** (§6) for layout/render/hit-test if depth grows.
-7. **More widgets** (§12): text input (keyboard routing + editing), image/icon,
-   radio groups, scroll container (needs a retained scroll offset, keyed by id).
+7. **More widgets** (§12): text input (keyboard routing + editing), radio groups,
+   scroll container (needs a retained scroll offset, keyed by id).
 
 Done: immediate-mode core — per-frame arena + swap, screen root, frame lifecycle
 (§0, §2, §10); hashed-ID identity (§1); layered overlays (§5); two-pass solver
 measure+arrange (§6, §8); AABB geometry (§7); constraints/anchors + Row/Column/
 Grid flow (§8); render-data emission with layering + press feedback (§6, §11);
 event-accumulation input + prev-frame hit-test + capture/focus/click (§11);
-widget layer label/button/checkbox/toggle/slider + toolbar/menu/floating (§12);
+widget layer label/button/checkbox/toggle/slider/image on a trait-driven `control`
+core + toolbar/menu/floating (§12);
 SDL3+GL demo host (§13); test suite ported to immediate mode (`test/`, 39 tests).

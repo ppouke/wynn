@@ -47,6 +47,7 @@ render :: proc(ctx: ^Context, allocator: mem.Allocator) -> []Render_Data {
 					text = n.text,
 					text_size = n.text_size,
 					value = n.value,
+					image = n.image,
 				},
 			)
 		}
